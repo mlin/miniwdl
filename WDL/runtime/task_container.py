@@ -113,6 +113,10 @@ class TaskContainer(ABC):
     """
 
     _running: bool
+    last_exit_code: Optional[int]
+    """
+    Exit code from the most recent task command attempt, if known.
+    """
 
     def __init__(self, cfg: config.Loader, run_id: str, host_dir: str) -> None:
         self.cfg = cfg
@@ -126,6 +130,7 @@ class TaskContainer(ABC):
         self._running = False
         self.runtime_values = {}
         self.failure_info = None
+        self.last_exit_code = None
         os.makedirs(self.host_work_dir())
 
     def add_paths(self, host_paths: Iterable[str]) -> None:
@@ -293,6 +298,18 @@ class TaskContainer(ABC):
                 raise Error.RuntimeError("invalid setting of runtime.gpu")
             ans["gpu"] = runtime_eval["gpu"].value
 
+    def task_runtime_info(
+        self, logger: logging.Logger, runtime_eval: Dict[str, Value.Base]
+    ) -> Dict[str, Any]:
+        """
+        Return task-scoped runtime info if available, to populate the WDL 1.2 ``task`` variable.
+
+        Returned values should be JSON-serializable and use the task scoped member names
+        (e.g. ``cpu``, ``memory``, ``container``, ``gpu``, ``fpga``, ``disks``, ``end_time``).
+        Base implementation provides no additional info.
+        """
+        return {}
+
     def run(self, logger: logging.Logger, command: str) -> None:
         """
         1. Container is instantiated with the configured mounts and resources
@@ -311,6 +328,7 @@ class TaskContainer(ABC):
         # container-specific logic should be in _run(). this wrapper traps signals
 
         assert not self._running
+        self.last_exit_code = None
         if command.strip():  # if the command is empty then don't bother with any of this
             preamble = self.cfg.get("task_runtime", "command_preamble")
             if preamble.strip():
@@ -321,6 +339,7 @@ class TaskContainer(ABC):
                 self._running = True
                 try:
                     exit_code = self._run(logger, terminating, command)
+                    self.last_exit_code = exit_code
                 finally:
                     self._running = False
 
@@ -335,6 +354,8 @@ class TaskContainer(ABC):
                         if not terminating()
                         else Terminated()
                     )
+        else:
+            self.last_exit_code = 0
 
     @abstractmethod
     def _run(self, logger: logging.Logger, terminating: Callable[[], bool], command: str) -> int:

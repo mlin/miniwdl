@@ -422,14 +422,6 @@ class Task(SourceNode):
                         type_env, stdlib, check_quant=check_quant, struct_types=struct_types
                     )
                 )
-            # Typecheck the command (string)
-            errors.try1(
-                lambda: self.command.infer_type(
-                    type_env, stdlib, check_quant=check_quant, struct_types=struct_types
-                ).typecheck(Type.String())
-            )
-            for b in self.available_inputs:
-                errors.try1(lambda: _check_serializable_map_keys(b.value.type, b.name, b.value))
             # Typecheck runtime expressions
             for _, runtime_expr in self.runtime.items():
                 errors.try1(
@@ -441,19 +433,35 @@ class Task(SourceNode):
                 )  # .typecheck()
                 # (At this stage we don't care about the overall expression type, just that it
                 #  typechecks internally.)
+            type_env_task = type_env
+            if self.effective_wdl_version not in ("draft-2", "1.0", "1.1"):
+                # Add task-scoped runtime info for typechecking task command & outputs (WDL 1.2+)
+                type_env_task = _add_struct_instance_to_type_env(
+                    "task", _task_scoped_type(self), type_env, ctx=self
+                )
+            # Typecheck the command (string)
+            errors.try1(
+                lambda: self.command.infer_type(
+                    type_env_task, stdlib, check_quant=check_quant, struct_types=struct_types
+                ).typecheck(Type.String())
+            )
+            for b in self.available_inputs:
+                errors.try1(lambda: _check_serializable_map_keys(b.value.type, b.name, b.value))
             # Add output declarations to type environment
             for decl in self.outputs:
                 type_env2 = errors.try1(
-                    (lambda decl: lambda: decl.add_to_type_env(struct_types, type_env))(decl)
+                    (lambda decl: lambda: decl.add_to_type_env(struct_types, type_env_task))(decl)
                 )
                 if type_env2:
-                    type_env = type_env2
+                    type_env_task = type_env2
             errors.maybe_raise()
             # Typecheck the output expressions
             stdlib = StdLib.TaskOutputs(self.effective_wdl_version)
             for decl in self.outputs:
                 errors.try1(
-                    lambda: decl.typecheck(type_env, stdlib, struct_types, check_quant=check_quant)
+                    lambda: decl.typecheck(
+                        type_env_task, stdlib, struct_types, check_quant=check_quant
+                    )
                 )
                 errors.try1(lambda: _check_serializable_map_keys(decl.type, decl.name, decl))
 
@@ -2067,6 +2075,60 @@ def _check_serializable_map_keys(t: Type.Base, name: str, node: SourceNode) -> N
             )
     for p in t.parameters:
         _check_serializable_map_keys(p, name, node)
+
+
+def _task_scoped_type(task: Task) -> Type.StructInstance:
+    # Minimal synthetic struct to model WDL 1.2 task-scoped runtime info.
+    counter = [0]
+
+    def meta_value_type(v: Any, name_prefix: str) -> Type.Base:
+        if isinstance(v, Expr.Int):
+            return Type.Int()
+        if isinstance(v, Expr.Float):
+            return Type.Float()
+        if isinstance(v, Expr.Boolean):
+            return Type.Boolean()
+        if isinstance(v, Expr.Null) or v is None:
+            return Type.Any(null=True)
+        if isinstance(v, (Expr.String, str)):
+            return Type.String()
+        if isinstance(v, list):
+            if not v:
+                return Type.Array(Type.Any())
+            item_types = [meta_value_type(item, name_prefix) for item in v]
+            return Type.Array(Type.unify(item_types, check_quant=False))
+        if isinstance(v, dict):
+            return meta_object_type(v, name_prefix)
+        return Type.Any()
+
+    def meta_object_type(d: Dict[str, Any], name_prefix: str) -> Type.StructInstance:
+        ty = Type.StructInstance(f"__{name_prefix}_{counter[0]}")
+        counter[0] += 1
+        members = {}
+        for k, v in d.items():
+            members[k] = meta_value_type(v, name_prefix)
+        ty.members = members
+        return ty
+
+    meta_ty = meta_object_type(task.meta or {}, "task_meta")
+    parameter_meta_ty = meta_object_type(task.parameter_meta or {}, "task_parameter_meta")
+    task_ty = Type.StructInstance("__task")
+    task_ty.members = {
+        "name": Type.String(),
+        "id": Type.String(),
+        "container": Type.String(optional=True),
+        "cpu": Type.Float(),
+        "memory": Type.Int(),
+        "gpu": Type.Array(Type.String()),
+        "fpga": Type.Array(Type.String()),
+        "disks": Type.Map((Type.String(), Type.Int())),
+        "attempt": Type.Int(),
+        "end_time": Type.Int(optional=True),
+        "return_code": Type.Int(optional=True),
+        "meta": meta_ty,
+        "parameter_meta": parameter_meta_ty,
+    }
+    return task_ty
 
 
 def _describe_struct_types(exe: Union[Task, Workflow]) -> Dict[str, str]:

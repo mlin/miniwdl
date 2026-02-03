@@ -28,6 +28,7 @@ from .._util import (
     pathsize,
     link_force,
     symlink_force,
+    parse_byte_size,
     rmtree_atomic,
 )
 from .._util import StructuredLogMessage as _
@@ -179,9 +180,20 @@ def run_local_task(  # type: ignore[return]
 
                 # evaluate runtime fields
                 stdlib = InputStdLib(task.effective_wdl_version, logger, container)
-                _eval_task_runtime(
+                runtime_eval = _eval_task_runtime(
                     cfg, logger, run_id, task, posix_inputs, container, container_env, stdlib
                 )
+                if task.effective_wdl_version not in ("draft-2", "1.0", "1.1"):
+                    task_env = _task_scoped_value(
+                        cfg,
+                        logger,
+                        run_id,
+                        task,
+                        container,
+                        runtime_eval,
+                        return_code=None,
+                    )
+                    container_env = container_env.bind("task", task_env)
 
                 # interpolate command
                 old_command_dedent = cfg["task_runtime"].get_bool("old_command_dedent")
@@ -209,6 +221,19 @@ def run_local_task(  # type: ignore[return]
 
                 # start container & run command (and retry if needed)
                 _try_task(cfg, task, logger, container, command, terminating)
+
+                # update task return code for output declarations
+                if task.effective_wdl_version not in ("draft-2", "1.0", "1.1"):
+                    task_env = _task_scoped_value(
+                        cfg,
+                        logger,
+                        run_id,
+                        task,
+                        container,
+                        runtime_eval,
+                        return_code=container.last_exit_code,
+                    )
+                    container_env = container_env.bind("task", task_env)
 
                 # evaluate output declarations
                 outputs = _eval_task_outputs(logger, run_id, task, container_env, container)
@@ -489,7 +514,7 @@ def _eval_task_runtime(
     container: "TaskContainer",
     env: Env.Bindings[Value.Base],
     stdlib: StdLib.Base,
-) -> None:
+) -> Dict[str, Value.Base]:
     # evaluate runtime{} expressions (merged with any configured defaults)
     runtime_defaults = cfg.get_dict("task_runtime", "defaults")
     if run_id.startswith("download-"):
@@ -569,6 +594,109 @@ def _eval_task_runtime(
     )
     if unused_keys:
         logger.warning(_("ignored runtime settings", keys=unused_keys))
+
+    return runtime_values
+
+
+def _meta_value_to_json(v: Any) -> Any:
+    if isinstance(v, Expr.Int):
+        return v.value
+    if isinstance(v, Expr.Float):
+        return v.value
+    if isinstance(v, Expr.Boolean):
+        return v.value
+    if isinstance(v, Expr.Null):
+        return None
+    if isinstance(v, Expr.String):
+        literal = v.literal
+        if isinstance(literal, Value.String):
+            return literal.value
+        return str(v)
+    if isinstance(v, dict):
+        return {k: _meta_value_to_json(vv) for k, vv in v.items()}
+    if isinstance(v, list):
+        return [_meta_value_to_json(vv) for vv in v]
+    return v
+
+
+def _normalize_task_runtime_info(info: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = {}
+    for key, value in info.items():
+        normalized[key] = value.json if isinstance(value, Value.Base) else value
+    return normalized
+
+
+def _task_scoped_value(
+    cfg: config.Loader,
+    logger: logging.Logger,
+    run_id: str,
+    task: Tree.Task,
+    container: "TaskContainer",
+    runtime_eval: Dict[str, Value.Base],
+    return_code: Optional[int],
+) -> Value.Struct:
+    task_type = Tree._task_scoped_type(task)
+    container_overrides = _normalize_task_runtime_info(
+        container.task_runtime_info(logger, runtime_eval)
+    )
+
+    host_limits = None
+
+    def get_host_limits() -> Dict[str, int]:
+        nonlocal host_limits
+        if host_limits is None:
+            host_limits = container.detect_resource_limits(cfg, logger)
+        return host_limits
+
+    def _runtime_string(value: Value.Base) -> str:
+        if isinstance(value, Value.Array) and value.value:
+            value = value.value[0]
+        return value.coerce(Type.String()).value
+
+    cpu_value = None
+    if "cpu" in container.runtime_values:
+        cpu_value = float(container.runtime_values["cpu"])
+    elif "cpu" in runtime_eval:
+        cpu_value = runtime_eval["cpu"].coerce(Type.Float()).value
+    else:
+        cpu_value = float(max(1, get_host_limits().get("cpu", 1)))
+
+    memory_value = None
+    if "memory_reservation" in container.runtime_values:
+        memory_value = int(container.runtime_values["memory_reservation"])
+    elif "memory" in runtime_eval:
+        memory_str = runtime_eval["memory"].coerce(Type.String()).value
+        memory_value = parse_byte_size(memory_str)
+    else:
+        memory_value = int(max(1, get_host_limits().get("mem_bytes", 1)))
+
+    container_value = None
+    if "docker" in container.runtime_values:
+        container_value = container.runtime_values["docker"]
+    elif "container" in runtime_eval:
+        container_value = _runtime_string(runtime_eval["container"])
+    elif "docker" in runtime_eval:
+        container_value = _runtime_string(runtime_eval["docker"])
+
+    task_info = {
+        "name": task.name,
+        "id": run_id,
+        "container": container_value,
+        "cpu": cpu_value,
+        "memory": memory_value,
+        "gpu": [],
+        "fpga": [],
+        "disks": {},
+        # NOTE: attempt is currently not updated for retries, since the command isn't
+        # re-interpolated per attempt.
+        "attempt": max(0, container.try_counter - 1),
+        "end_time": None,
+        "return_code": return_code,
+        "meta": _meta_value_to_json(task.meta),
+        "parameter_meta": _meta_value_to_json(task.parameter_meta),
+    }
+    task_info.update(container_overrides)
+    return Value.from_json(task_type, task_info)
 
 
 def _try_task(

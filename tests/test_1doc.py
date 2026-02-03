@@ -613,6 +613,63 @@ task compare_md5sum {
         with self.assertRaises(WDL.Error.MultipleDefinitions):
             WDL.parse_tasks(txt, version="1.2")[0].typecheck()
 
+    def test_task_scoped_info(self):
+        doc = r"""
+        version 1.2
+        task t {
+            input {
+                String s
+            }
+            command {
+                echo "~{task.name}"
+            }
+            output {
+                String o = task.name
+            }
+            requirements {
+                cpu: 1
+            }
+        }
+        """
+        WDL.parse_document(doc).typecheck()
+
+        doc = r"""
+        version 1.2
+        task t {
+            input {
+                String s = task.name
+            }
+            command {
+                echo "x"
+            }
+            output {
+                String o = "x"
+            }
+        }
+        """
+        with self.assertRaises(WDL.Error.UnknownIdentifier):
+            WDL.parse_document(doc).typecheck()
+
+        doc = r"""
+        version 1.2
+        task t {
+            input {
+                String s
+            }
+            command {
+                echo "x"
+            }
+            output {
+                String o = "x"
+            }
+            requirements {
+                cpu: task.cpu
+            }
+        }
+        """
+        with self.assertRaises(WDL.Error.UnknownIdentifier):
+            WDL.parse_document(doc).typecheck()
+
 
 class TestTypes(unittest.TestCase):
     def test_parser(self):
