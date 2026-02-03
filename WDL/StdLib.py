@@ -148,6 +148,10 @@ class Base:
             self.as_pairs = _AsPairs()
             self.collect_by_key = _CollectByKey()
 
+        if self.wdl_version not in ["draft-2", "1.0", "1.1"]:
+            # WDL 1.2+ functions
+            self.contains = _Contains()
+
     def _read(self, parse: Callable[[str], Value.Base]) -> Callable[[Value.File], Value.Base]:
         "generate read_* function implementation based on parse"
 
@@ -1158,3 +1162,58 @@ class _AsMap(_CollectByKey):
                 raise Error.EvalError(expr, "duplicate keys supplied to as_map(): " + str(k))
             singletons.append((k, vs.value[0]))
         return Value.Map((collectedty.item_type[0], arrayty.item_type), singletons, expr)
+
+
+class _Contains(EagerFunction):
+    # Boolean contains(Array[X], X)
+    # Determine whether an array contains a specified value
+
+    def infer_type(self, expr: "Expr.Apply") -> Type.Base:
+        if len(expr.arguments) != 2:
+            raise Error.WrongArity(expr, 2)
+
+        arr_ty = expr.arguments[0].type
+        if not isinstance(arr_ty, Type.Array) or (expr._check_quant and arr_ty.optional):
+            raise Error.StaticTypeMismatch(expr.arguments[0], Type.Array(Type.Any()), arr_ty)
+
+        # For empty arrays (Array[Any]), we can accept any element type
+        # The runtime will handle empty arrays correctly (always returns false)
+        if not isinstance(arr_ty.item_type, Type.Any):
+            # Spec defines two signatures:
+            # - Boolean contains(Array[P], P)
+            # - Boolean contains(Array[P?], P?)
+            # The element type must match the array item type including optionality,
+            # with standard coercion allowed (T can coerce to T?)
+            elem_ty = expr.arguments[1].type
+
+            # Check that element type is compatible with array item type
+            if not elem_ty.equatable(arr_ty.item_type):
+                raise Error.StaticTypeMismatch(
+                    expr.arguments[1],
+                    arr_ty.item_type,
+                    elem_ty,
+                    "for contains() element argument",
+                )
+
+            # Additional check: if array item type is non-optional, element must not be optional
+            # (but T can coerce to T? is allowed, so T into Array[T?] is ok)
+            if not arr_ty.item_type.optional and elem_ty.optional:
+                raise Error.StaticTypeMismatch(
+                    expr.arguments[1],
+                    arr_ty.item_type,
+                    elem_ty,
+                    "for contains() element argument - cannot check optional value in non-optional array",
+                )
+
+        return Type.Boolean()
+
+    def _call_eager(self, expr: "Expr.Apply", arguments: List[Value.Base]) -> Value.Base:
+        arr = arguments[0]
+        assert isinstance(arr, Value.Array)
+        elem = arguments[1]
+
+        # Use Value.__eq__ for proper equality comparison
+        for item in arr.value:
+            if elem == item:
+                return Value.Boolean(True)
+        return Value.Boolean(False)
