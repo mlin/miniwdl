@@ -1637,10 +1637,10 @@ class TestTaskRuntimeInfo(RunnerTestCase):
                 String name = task.name
                 String desc = task.meta.description
                 String pdesc = task.parameter_meta.infile.description
-                String container = task.container
+                String? container = task.container
                 Float cpu = task.cpu
                 Int mem = task.memory
-                Int rc = task.return_code
+                Int? rc = task.return_code
             }
             requirements {
                 container: "ubuntu:20.04"

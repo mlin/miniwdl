@@ -11,7 +11,7 @@ import glob
 import threading
 import shutil
 import regex
-from typing import Tuple, List, Dict, Optional, Callable, Set, Any, Union, TYPE_CHECKING
+from typing import Tuple, List, Dict, Optional, Callable, Set, Any, Union, TYPE_CHECKING, cast
 from contextlib import ExitStack, suppress
 from collections import Counter
 
@@ -696,7 +696,8 @@ def _task_scoped_value(
         "parameter_meta": _meta_value_to_json(task.parameter_meta),
     }
     task_info.update(container_overrides)
-    return Value.from_json(task_type, task_info)
+    task_value = Value.from_json(task_type, task_info)
+    return cast(Value.Struct, task_value)
 
 
 def _try_task(
