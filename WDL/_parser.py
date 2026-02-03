@@ -237,6 +237,7 @@ class _DocTransformer(_ExprTransformer):
 
     def _check_keyword(self, pos, name, *, allow_task: bool = False):
         if name in self._keywords and not (allow_task and name == "task"):
+            assert self._version is not None
             raise Error.SyntaxError(
                 pos, "unexpected keyword {}".format(name), self._version, self._declared_version
             )
@@ -260,9 +261,9 @@ class _DocTransformer(_ExprTransformer):
     def get_name(self, meta, items) -> Expr.Base:
         ans = super().get_name(meta, items)
         if items[1] not in ("left", "right"):
-            allow_member = (
-                self._version not in ("draft-2", "1.0", "1.1")
-                and items[1] in ("meta", "parameter_meta")
+            allow_member = self._version not in ("draft-2", "1.0", "1.1") and items[1] in (
+                "meta",
+                "parameter_meta",
             )
             if not allow_member:
                 self._check_keyword(ans.pos, items[1])
