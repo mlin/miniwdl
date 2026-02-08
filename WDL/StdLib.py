@@ -143,7 +143,7 @@ class Base:
             self.max = _ArithmeticOperator("max", lambda l, r: max(l, r))
             self.quote = _Quote()
             self.squote = _Quote(squote=True)
-            self.keys = _Keys()
+            self.keys = _Keys(wdl_version=self.wdl_version)
             self.as_map = _AsMap()
             self.as_pairs = _AsPairs()
             self.collect_by_key = _CollectByKey()
@@ -1056,23 +1056,78 @@ class _Quote(EagerFunction):
 
 
 class _Keys(EagerFunction):
+    # Array[P] keys(Map[P, Y])
+    # Array[String] keys(Struct|Object)  [WDL 1.2+]
+    # Returns an array of keys from a Map, Struct, or Object
+
+    def __init__(self, wdl_version: str):
+        super().__init__()
+        self.wdl_version = wdl_version
+
     def infer_type(self, expr: "Expr.Apply") -> Type.Base:
         if len(expr.arguments) != 1:
             raise Error.WrongArity(expr, 1)
         arg0ty = expr.arguments[0].type
-        if not isinstance(arg0ty, Type.Map) or (expr._check_quant and arg0ty.optional):
+
+        # Accept Map, StructInstance, or Object
+        if isinstance(arg0ty, Type.Map):
+            if expr._check_quant and arg0ty.optional:
+                raise Error.StaticTypeMismatch(
+                    expr.arguments[0], Type.Map((Type.Any(), Type.Any())), arg0ty
+                )
+            # For Map[P, Y], return Array[P]
+            return Type.Array(arg0ty.item_type[0].copy())
+        elif isinstance(arg0ty, (Type.StructInstance, Type.Object)):
+            # Struct/Object support added in WDL 1.2
+            if self.wdl_version in ["draft-2", "1.0", "1.1"]:
+                raise Error.StaticTypeMismatch(
+                    expr.arguments[0],
+                    Type.Map((Type.Any(), Type.Any())),
+                    arg0ty,
+                    "keys() does not accept Struct or Object in WDL version {}".format(
+                        self.wdl_version
+                    ),
+                )
+            if expr._check_quant and arg0ty.optional:
+                raise Error.StaticTypeMismatch(expr.arguments[0], Type.StructInstance(""), arg0ty)
+            # For Struct or Object, return Array[String]
+            return Type.Array(Type.String())
+        else:
             raise Error.StaticTypeMismatch(
-                expr.arguments[0], Type.Map((Type.Any(), Type.Any())), arg0ty
+                expr.arguments[0],
+                Type.Map((Type.Any(), Type.Any())),
+                arg0ty,
+                "keys() requires Map, Struct, or Object",
             )
-        return Type.Array(arg0ty.item_type[0].copy())
 
     def _call_eager(self, expr: "Expr.Apply", arguments: List[Value.Base]) -> Value.Base:
-        assert isinstance(arguments[0], Value.Map)
-        mapty = arguments[0].type
-        assert isinstance(mapty, Type.Map)
-        return Value.Array(
-            mapty.item_type[0], [p[0].coerce(mapty.item_type[0]) for p in arguments[0].value], expr
-        )
+        arg = arguments[0]
+
+        if isinstance(arg, Value.Map):
+            mapty = arg.type
+            assert isinstance(mapty, Type.Map)
+            return Value.Array(
+                mapty.item_type[0], [p[0].coerce(mapty.item_type[0]) for p in arg.value], expr
+            )
+        elif isinstance(arg, Value.Struct):
+            # For structs, return keys in the order they appear in the struct definition.
+            # The struct type's members dict maintains insertion order (Python 3.7+).
+            #
+            # Note: We return ALL keys including optional members, even if they are set to None.
+            # This is consistent with the spec's distinction (for contains_key) between "presence"
+            # and "defined": optional members are present in the struct but may not be defined.
+            # The Value.Struct constructor ensures all optional members exist in the value dict
+            # (populated with Null() if omitted in the literal), so all members are always present.
+            struct_ty = arg.type
+            if isinstance(struct_ty, Type.StructInstance) and struct_ty.members:
+                # Use the order from the type definition
+                keys = list(struct_ty.members.keys())
+            else:
+                # Fallback to value dict order (for Object type)
+                keys = list(arg.value.keys())
+            return Value.Array(Type.String(), [Value.String(k) for k in keys], expr)
+        else:
+            raise Error.EvalError(expr, f"keys() received unexpected argument type: {type(arg)}")
 
 
 class _Values(EagerFunction):
