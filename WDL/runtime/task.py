@@ -600,27 +600,6 @@ def _eval_task_runtime(
     return runtime_values
 
 
-def _meta_value_to_json(v: Any) -> Any:
-    if isinstance(v, Expr.Int):
-        return v.value
-    if isinstance(v, Expr.Float):
-        return v.value
-    if isinstance(v, Expr.Boolean):
-        return v.value
-    if isinstance(v, Expr.Null):
-        return None
-    if isinstance(v, Expr.String):
-        literal = v.literal
-        if isinstance(literal, Value.String):
-            return literal.value
-        return str(v)
-    if isinstance(v, dict):
-        return {k: _meta_value_to_json(vv) for k, vv in v.items()}
-    if isinstance(v, list):
-        return [_meta_value_to_json(vv) for vv in v]
-    return v
-
-
 def _normalize_task_runtime_info(info: Dict[str, Any]) -> Dict[str, Any]:
     normalized = {}
     for key, value in info.items():
@@ -694,8 +673,8 @@ def _task_scoped_value(
         "attempt": max(0, container.try_counter - 1),
         "end_time": None,
         "return_code": return_code,
-        "meta": _meta_value_to_json(task.meta),
-        "parameter_meta": _meta_value_to_json(task.parameter_meta),
+        "meta": Expr._meta_value_to_json(task.meta),
+        "parameter_meta": Expr._meta_value_to_json(task.parameter_meta),
     }
     task_info.update(container_overrides)
     task_value = Value.from_json(task_type, task_info)

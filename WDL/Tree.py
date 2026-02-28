@@ -31,7 +31,7 @@ from typing import (
 )
 from abc import ABC, abstractmethod
 from .Error import SourcePosition, SourceNode
-from . import Type, Expr, Env, Error, StdLib, _parser, _util
+from . import Type, Expr, Env, Error, StdLib, Value, _parser, _util
 
 
 class StructTypeDef(SourceNode):
@@ -2097,33 +2097,18 @@ def _task_scoped_type(task: Task) -> Type.StructInstance:
     # Minimal synthetic struct to model WDL 1.2 task-scoped runtime info.
     counter = [0]
 
-    def meta_value_type(v: Any, name_prefix: str) -> Type.Base:
-        if isinstance(v, Expr.Int):
-            return Type.Int()
-        if isinstance(v, Expr.Float):
-            return Type.Float()
-        if isinstance(v, Expr.Boolean):
-            return Type.Boolean()
-        if isinstance(v, Expr.Null) or v is None:
-            return Type.Any(null=True)
-        if isinstance(v, (Expr.String, str)):
-            return Type.String()
-        if isinstance(v, list):
-            if not v:
-                return Type.Array(Type.Any())
-            item_types = [meta_value_type(item, name_prefix) for item in v]
-            return Type.Array(Type.unify(item_types, check_quant=False))
-        if isinstance(v, dict):
-            return meta_object_type(v, name_prefix)
-        return Type.Any()
-
     def meta_object_type(d: Dict[str, Any], name_prefix: str) -> Type.StructInstance:
+        meta_json = Expr._meta_value_to_json(d)
+        meta_value = Value._infer_from_json(meta_json)
+        meta_type = meta_value.type
+        if isinstance(meta_type, Type.Object):
+            ty = Type.StructInstance(f"__{name_prefix}_{counter[0]}")
+            counter[0] += 1
+            ty.members = meta_type.members
+            return ty
         ty = Type.StructInstance(f"__{name_prefix}_{counter[0]}")
         counter[0] += 1
-        members = {}
-        for k, v in d.items():
-            members[k] = meta_value_type(v, name_prefix)
-        ty.members = members
+        ty.members = {}
         return ty
 
     meta_ty = meta_object_type(task.meta or {}, "task_meta")
