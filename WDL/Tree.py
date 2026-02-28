@@ -438,8 +438,9 @@ class Task(SourceNode):
             type_env_task = type_env
             if self.effective_wdl_version not in ("draft-2", "1.0", "1.1"):
                 # Add task-scoped runtime info for typechecking task command & outputs (WDL 1.2+)
+                task_ctx = Decl(self.pos, Type.Any(), "task", id_prefix="task")
                 type_env_task = _add_struct_instance_to_type_env(
-                    "task", _task_scoped_type(self), type_env, ctx=None
+                    "task", _task_scoped_type(self), type_env, ctx=task_ctx
                 )
             # Typecheck the command (string)
             errors.try1(
@@ -1872,8 +1873,7 @@ def _expr_workflow_node_dependencies(expr: Optional[Expr.Base]) -> Iterable[str]
     #   - Gather: reference to values(s) (array/optional) gathered from a scatter or conditional
     #             section
     if isinstance(expr, Expr.Ident):
-        if not isinstance(expr.referee, WorkflowNode):
-            return
+        assert isinstance(expr.referee, WorkflowNode)
         # omit dependence on containing scatter sections (when scatter variable is used), which we
         # handle implicitly
         if not isinstance(expr.referee, WorkflowSection):
