@@ -422,7 +422,7 @@ class Struct(Base):
         value = dict(value)
         if isinstance(type, Type.StructInstance):
             # fill in null for any omitted optional members
-            assert type.members
+            assert type.members is not None
             for k in type.members:
                 if k not in value:
                     assert type.members[k].optional
@@ -444,7 +444,7 @@ class Struct(Base):
         return self
 
     def _coerce_to_struct(self, desired_type: Type.StructInstance) -> Base:
-        assert desired_type.members
+        assert desired_type.members is not None
         if isinstance(self.type, Type.StructInstance) and self.type.type_id == desired_type.type_id:
             return self
         try:
@@ -585,7 +585,11 @@ def from_json(type: Type.Base, value: Any) -> Base:
             assert isinstance(k, str)
             items.append((String(k).coerce(type.item_type[0]), from_json(type.item_type[1], v)))
         return Map(type.item_type, items)
-    if isinstance(type, Type.StructInstance) and isinstance(value, dict) and type.members:
+    if (
+        isinstance(type, Type.StructInstance)
+        and isinstance(value, dict)
+        and type.members is not None
+    ):
         for k, ty in type.members.items():
             if k not in value and not ty.optional:
                 raise Error.InputError(
