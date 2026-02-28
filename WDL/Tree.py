@@ -2095,21 +2095,13 @@ def _check_serializable_map_keys(t: Type.Base, name: str, node: SourceNode) -> N
 
 def _task_scoped_type(task: Task) -> Type.StructInstance:
     # Minimal synthetic struct to model WDL 1.2 task-scoped runtime info.
-    counter = [0]
-
     def meta_object_type(d: Dict[str, Any], name_prefix: str) -> Type.StructInstance:
         meta_json = Expr._meta_value_to_json(d)
-        meta_value = Value._infer_from_json(meta_json)
-        meta_type = meta_value.type
-        if isinstance(meta_type, Type.Object):
-            ty = Type.StructInstance(f"__{name_prefix}_{counter[0]}")
-            counter[0] += 1
-            ty.members = meta_type.members
-            return ty
-        ty = Type.StructInstance(f"__{name_prefix}_{counter[0]}")
-        counter[0] += 1
-        ty.members = {}
-        return ty
+        meta_value = Value._infer_from_json(
+            meta_json, struct_types=True, struct_prefix=f"__{name_prefix}"
+        )
+        assert isinstance(meta_value.type, Type.StructInstance)
+        return meta_value.type
 
     meta_ty = meta_object_type(task.meta or {}, "task_meta")
     parameter_meta_ty = meta_object_type(task.parameter_meta or {}, "task_parameter_meta")

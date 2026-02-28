@@ -12,6 +12,8 @@ import json
 import copy
 import base64
 import hashlib
+import itertools
+import threading
 from abc import ABC
 from typing import Any, List, Optional, Tuple, Dict, Iterable, Union, Callable, Set, TYPE_CHECKING
 from contextlib import suppress
@@ -19,6 +21,14 @@ from . import Error, Type, Env
 
 if TYPE_CHECKING:
     from . import Expr
+
+_STRUCT_ID_COUNTER = itertools.count()
+_STRUCT_ID_LOCK = threading.Lock()
+
+
+def _struct_type_fresh_id() -> int:
+    with _STRUCT_ID_LOCK:
+        return next(_STRUCT_ID_COUNTER)
 
 
 class Base(ABC):
@@ -615,7 +625,26 @@ def from_json(type: Type.Base, value: Any) -> Base:
     raise Error.InputError(f"couldn't construct {str(type)} from {json.dumps(value)}")
 
 
-def _infer_from_json(j: Any) -> Base:
+def _infer_from_json(
+    j: Any,
+    *,
+    struct_types: bool = False,
+    struct_prefix: str = "__object",
+) -> Base:
+    """
+    Infer a WDL Value from a JSON-like Python object (str, int, float, bool, None, list, dict).
+
+    By default, dicts are inferred as Object-typed Struct values; these are typically coerced
+    soon afterward into StructInstance types that carry the expected member types.
+    When struct_types is True, dicts instead synthesize StructInstance values with generated type
+    names (prefixed by struct_prefix), which is useful when member access will be typechecked on
+    the inferred value itself (e.g. task.meta / parameter_meta).
+
+    Arrays do not attempt to unify item types: items may be heterogeneous, and in the default
+    Object path we expect a later coercion to provide the intended item type; with synthesized
+    struct types (each with unique names) unification also doesn't provide a stable or meaningful
+    type.
+    """
     if isinstance(j, str):
         return String(j)
     if isinstance(j, bool):
@@ -626,17 +655,31 @@ def _infer_from_json(j: Any) -> Base:
         return Float(j)
     if j is None:
         return Null()
-    # compound: don't yet try to infer unified types for nested values, since we expect a coercion
-    # to a StructInstance type to follow in short order, providing the expected item/member types
     if isinstance(j, list):
-        return Array(Type.Any(), [_infer_from_json(v) for v in j])
+        items = [
+            _infer_from_json(
+                v,
+                struct_types=struct_types,
+                struct_prefix=struct_prefix,
+            )
+            for v in j
+        ]
+        return Array(Type.Any(), items)
     if isinstance(j, dict):
         members = {}
         member_types = {}
         for k in j:
             assert isinstance(k, str)
-            members[k] = _infer_from_json(j[k])
+            members[k] = _infer_from_json(
+                j[k],
+                struct_types=struct_types,
+                struct_prefix=struct_prefix,
+            )
             member_types[k] = members[k].type
+        if struct_types:
+            struct_ty = Type.StructInstance(f"{struct_prefix}_{_struct_type_fresh_id()}")
+            struct_ty.members = member_types
+            return Struct(struct_ty, members)
         return Struct(Type.Object(member_types), members)
     raise Error.InputError(f"couldn't construct value from: {json.dumps(j)}")
 
