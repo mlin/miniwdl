@@ -31,7 +31,8 @@ from typing import (
 )
 from abc import ABC, abstractmethod
 from .Error import SourcePosition, SourceNode
-from . import Type, Expr, Env, Error, StdLib, Value, _parser, _util
+from . import Type, Expr, Env, Error, StdLib, _parser, _util
+from ._task_runtime_scoped_type import TaskRuntimeScopedType
 
 
 class StructTypeDef(SourceNode):
@@ -2095,33 +2096,7 @@ def _check_serializable_map_keys(t: Type.Base, name: str, node: SourceNode) -> N
 
 def _task_scoped_type(task: Task) -> Type.StructInstance:
     # Minimal synthetic struct to model WDL 1.2 task-scoped runtime info.
-    def meta_object_type(d: Dict[str, Any], name_prefix: str) -> Type.StructInstance:
-        meta_json = Expr._meta_value_to_json(d)
-        meta_value = Value._infer_from_json(
-            meta_json, struct_types=True, struct_prefix=f"__{name_prefix}"
-        )
-        assert isinstance(meta_value.type, Type.StructInstance)
-        return meta_value.type
-
-    meta_ty = meta_object_type(task.meta or {}, "task_meta")
-    parameter_meta_ty = meta_object_type(task.parameter_meta or {}, "task_parameter_meta")
-    task_ty = Type.StructInstance("__task")
-    task_ty.members = {
-        "name": Type.String(),
-        "id": Type.String(),
-        "container": Type.String(optional=True),
-        "cpu": Type.Float(),
-        "memory": Type.Int(),
-        "gpu": Type.Array(Type.String()),
-        "fpga": Type.Array(Type.String()),
-        "disks": Type.Map((Type.String(), Type.Int())),
-        "attempt": Type.Int(),
-        "end_time": Type.Int(optional=True),
-        "return_code": Type.Int(optional=True),
-        "meta": meta_ty,
-        "parameter_meta": parameter_meta_ty,
-    }
-    return task_ty
+    return TaskRuntimeScopedType.build_type(task)
 
 
 def _describe_struct_types(exe: Union[Task, Workflow]) -> Dict[str, str]:
