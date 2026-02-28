@@ -209,11 +209,10 @@ def _compound_coercion(
         if predicates:
             return predicates(to_type, from_type)
         if not from_type_predicate:
-            from_type_predicate = lambda ty: (
-                not isinstance(  # noqa: E731
-                    ty, (base_to_type, Type.Any)
-                )
-            )
+
+            def from_type_predicate(ty):
+                return not isinstance(ty, (base_to_type, Type.Any))
+
         return from_type_predicate(from_type)
     return False
 
