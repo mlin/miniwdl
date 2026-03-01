@@ -352,6 +352,7 @@ class Task(SourceNode):
             "return_code": Type.Int(optional=True),
             "meta": meta_ty,
             "parameter_meta": parameter_meta_ty,
+            # TODO: add task.ext (Object) for engine-specific runtime info.
         }
         return task_ty
 
@@ -471,6 +472,8 @@ class Task(SourceNode):
             type_env_task = type_env
             if self.effective_wdl_version not in ("draft-2", "1.0", "1.1"):
                 # Add task-scoped runtime info for typechecking task command & outputs (WDL 1.2+)
+                # NOTE: spec doesn't explicitly limit scope; we currently expose task runtime info
+                # only in command/output to avoid circularity with requirements and declarations.
                 task_ctx = Decl(self.pos, Type.Any(), "task", id_prefix="task")
                 type_env_task = _add_struct_instance_to_type_env(
                     "task", self.task_runtime_info_struct_type(), type_env, ctx=task_ctx

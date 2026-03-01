@@ -624,6 +624,7 @@ def _task_runtime_info_struct_value(
 
     def _runtime_string(value: Value.Base) -> str:
         if isinstance(value, Value.Array) and value.value:
+            # TODO: spec allows multiple container URIs; we currently select the first.
             value = value.value[0]
         return value.coerce(Type.String()).value
 
@@ -649,6 +650,8 @@ def _task_runtime_info_struct_value(
         container_value = _runtime_string(runtime_eval["container"])
     elif "docker" in runtime_eval:
         container_value = _runtime_string(runtime_eval["docker"])
+    # NOTE: spec says to fall back to requested/default if actual not available; we're using
+    # host limits for cpu/memory and None for container when missing.
 
     task_info = {
         "name": task.name,
@@ -659,9 +662,11 @@ def _task_runtime_info_struct_value(
         "gpu": [],
         "fpga": [],
         "disks": {},
-        # NOTE: attempt is currently not updated for retries, since the command isn't
+        # TODO: populate gpu/fpga/disks from actual/requested runtime info when available.
+        # FIXME: attempt is currently not updated for retries, since the command isn't
         # re-interpolated per attempt.
         "attempt": max(0, container.try_counter - 1),
+        # NOTE: end_time is always None; spec distinguishes None vs 0 vs positive deadline.
         "end_time": None,
         "return_code": return_code,
         "meta": Expr._meta_value_to_json(task.meta),
