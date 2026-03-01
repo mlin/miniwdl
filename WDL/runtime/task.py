@@ -620,14 +620,7 @@ def _task_scoped_value(
     container_overrides = _normalize_task_runtime_info(
         container.task_runtime_info(logger, runtime_eval)
     )
-
-    host_limits = None
-
-    def get_host_limits() -> Dict[str, int]:
-        nonlocal host_limits
-        if host_limits is None:
-            host_limits = container.detect_resource_limits(cfg, logger)
-        return host_limits
+    host_limits = container.detect_resource_limits(cfg, logger)
 
     def _runtime_string(value: Value.Base) -> str:
         if isinstance(value, Value.Array) and value.value:
@@ -639,7 +632,7 @@ def _task_scoped_value(
     elif "cpu" in runtime_eval:
         cpu_value = runtime_eval["cpu"].coerce(Type.Float()).value
     else:
-        cpu_value = float(max(1, get_host_limits().get("cpu", 1)))
+        cpu_value = float(max(1, host_limits.get("cpu", 1)))
 
     if "memory_reservation" in container.runtime_values:
         memory_value = int(container.runtime_values["memory_reservation"])
@@ -647,7 +640,7 @@ def _task_scoped_value(
         memory_str = runtime_eval["memory"].coerce(Type.String()).value
         memory_value = parse_byte_size(memory_str)
     else:
-        memory_value = int(max(1, get_host_limits().get("mem_bytes", 1)))
+        memory_value = int(max(1, host_limits.get("mem_bytes", 1)))
 
     container_value = None
     if "docker" in container.runtime_values:
