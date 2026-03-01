@@ -31,8 +31,7 @@ from typing import (
 )
 from abc import ABC, abstractmethod
 from .Error import SourcePosition, SourceNode
-from . import Type, Expr, Env, Error, StdLib, _parser, _util
-from ._task_runtime_scoped_type import TaskRuntimeScopedType
+from . import Type, Expr, Env, Error, StdLib, Value, _parser, _util
 
 
 class StructTypeDef(SourceNode):
@@ -323,6 +322,39 @@ class Task(SourceNode):
         # TODO: if the input section exists, then all postinputs decls must be
         #       bound
 
+    def runtime_scoped_type(self) -> Type.StructInstance:
+        """
+        Build the synthetic struct type modeling WDL 1.2 task-scoped runtime info.
+        """
+
+        def meta_object_type(d: Dict[str, Any], name_prefix: str) -> Type.StructInstance:
+            meta_json = Expr._meta_value_to_json(d)
+            meta_value = Value._infer_from_json(
+                meta_json, struct_types=True, struct_prefix=f"__{name_prefix}"
+            )
+            assert isinstance(meta_value.type, Type.StructInstance)
+            return meta_value.type
+
+        meta_ty = meta_object_type(self.meta or {}, "task_meta")
+        parameter_meta_ty = meta_object_type(self.parameter_meta or {}, "task_parameter_meta")
+        task_ty = Type.StructInstance("__task")
+        task_ty.members = {
+            "name": Type.String(),
+            "id": Type.String(),
+            "container": Type.String(optional=True),
+            "cpu": Type.Float(),
+            "memory": Type.Int(),
+            "gpu": Type.Array(Type.String()),
+            "fpga": Type.Array(Type.String()),
+            "disks": Type.Map((Type.String(), Type.Int())),
+            "attempt": Type.Int(),
+            "end_time": Type.Int(optional=True),
+            "return_code": Type.Int(optional=True),
+            "meta": meta_ty,
+            "parameter_meta": parameter_meta_ty,
+        }
+        return task_ty
+
     @property
     def available_inputs(self) -> Env.Bindings[Decl]:
         """:type: WDL.Env.Bindings[WDL.Tree.Decl]
@@ -441,7 +473,7 @@ class Task(SourceNode):
                 # Add task-scoped runtime info for typechecking task command & outputs (WDL 1.2+)
                 task_ctx = Decl(self.pos, Type.Any(), "task", id_prefix="task")
                 type_env_task = _add_struct_instance_to_type_env(
-                    "task", _task_scoped_type(self), type_env, ctx=task_ctx
+                    "task", self.runtime_scoped_type(), type_env, ctx=task_ctx
                 )
             # Typecheck the command (string)
             errors.try1(
@@ -2092,11 +2124,6 @@ def _check_serializable_map_keys(t: Type.Base, name: str, node: SourceNode) -> N
             )
     for p in t.parameters:
         _check_serializable_map_keys(p, name, node)
-
-
-def _task_scoped_type(task: Task) -> Type.StructInstance:
-    # Minimal synthetic struct to model WDL 1.2 task-scoped runtime info.
-    return TaskRuntimeScopedType.build_type(task)
 
 
 def _describe_struct_types(exe: Union[Task, Workflow]) -> Dict[str, str]:

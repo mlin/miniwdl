@@ -11,7 +11,7 @@ import glob
 import threading
 import shutil
 import regex
-from typing import Tuple, List, Dict, Optional, Callable, Set, Any, Union, TYPE_CHECKING
+from typing import Tuple, List, Dict, Optional, Callable, Set, Any, Union, TYPE_CHECKING, cast
 from contextlib import ExitStack, suppress
 from collections import Counter
 
@@ -28,11 +28,11 @@ from .._util import (
     pathsize,
     link_force,
     symlink_force,
+    parse_byte_size,
     rmtree_atomic,
 )
 from .._util import StructuredLogMessage as _
 from . import config, _statusbar
-from .._task_runtime_scoped_type import TaskRuntimeScopedType
 from .download import able as downloadable, run_cached as download
 from .cache import CallCache, new as new_call_cache
 from .error import OutputError, Interrupted, Terminated, RunFailed, error_json
@@ -600,6 +600,13 @@ def _eval_task_runtime(
     return runtime_values
 
 
+def _normalize_task_runtime_info(info: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = {}
+    for key, value in info.items():
+        normalized[key] = value.json if isinstance(value, Value.Base) else value
+    return normalized
+
+
 def _task_scoped_value(
     cfg: config.Loader,
     logger: logging.Logger,
@@ -609,9 +616,71 @@ def _task_scoped_value(
     runtime_eval: Dict[str, Value.Base],
     return_code: Optional[int],
 ) -> Value.Struct:
-    return TaskRuntimeScopedType.build_value(
-        cfg, logger, run_id, task, container, runtime_eval, return_code
+    task_type = task.runtime_scoped_type()
+    container_overrides = _normalize_task_runtime_info(
+        container.task_runtime_info(logger, runtime_eval)
     )
+
+    host_limits = None
+
+    def get_host_limits() -> Dict[str, int]:
+        nonlocal host_limits
+        if host_limits is None:
+            host_limits = container.detect_resource_limits(cfg, logger)
+        return host_limits
+
+    def _runtime_string(value: Value.Base) -> str:
+        if isinstance(value, Value.Array) and value.value:
+            value = value.value[0]
+        return value.coerce(Type.String()).value
+
+    if "cpu" in container.runtime_values:
+        cpu_value = float(container.runtime_values["cpu"])
+    elif "cpu" in runtime_eval:
+        cpu_value = runtime_eval["cpu"].coerce(Type.Float()).value
+    else:
+        cpu_value = float(max(1, get_host_limits().get("cpu", 1)))
+
+    if "memory_reservation" in container.runtime_values:
+        memory_value = int(container.runtime_values["memory_reservation"])
+    elif "memory" in runtime_eval:
+        memory_str = runtime_eval["memory"].coerce(Type.String()).value
+        memory_value = parse_byte_size(memory_str)
+    else:
+        memory_value = int(max(1, get_host_limits().get("mem_bytes", 1)))
+
+    container_value = None
+    if "docker" in container.runtime_values:
+        container_value = container.runtime_values["docker"]
+    elif "container" in runtime_eval:
+        container_value = _runtime_string(runtime_eval["container"])
+    elif "docker" in runtime_eval:
+        container_value = _runtime_string(runtime_eval["docker"])
+
+    task_info = {
+        "name": task.name,
+        "id": run_id,
+        "container": container_value,
+        "cpu": cpu_value,
+        "memory": memory_value,
+        "gpu": [],
+        "fpga": [],
+        "disks": {},
+        # NOTE: attempt is currently not updated for retries, since the command isn't
+        # re-interpolated per attempt.
+        "attempt": max(0, container.try_counter - 1),
+        "end_time": None,
+        "return_code": return_code,
+        "meta": Expr._meta_value_to_json(task.meta),
+        "parameter_meta": Expr._meta_value_to_json(task.parameter_meta),
+    }
+    task_info.update(container_overrides)
+    task_value = Value.from_json(task_type, task_info)
+    try:
+        task_value.coerce(task_type)
+    except Error.InputError as ex:
+        raise AssertionError("task-scoped runtime info failed typecheck") from ex
+    return cast(Value.Struct, task_value)
 
 
 def _try_task(
