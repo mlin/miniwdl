@@ -7,10 +7,10 @@ from typing import Any, Dict, Optional, TYPE_CHECKING, cast
 
 from . import Type, Value, Expr, Error
 from ._util import parse_byte_size
-from .runtime import config
 
 if TYPE_CHECKING:  # pragma: no cover
     from .Tree import Task
+    from .runtime import config
     from .runtime.task_container import TaskContainer
 
 
@@ -58,7 +58,7 @@ class TaskRuntimeScopedType:
 
     @staticmethod
     def build_value(
-        cfg: config.Loader,
+        cfg: "config.Loader",
         logger: logging.Logger,
         run_id: str,
         task: "Task",
