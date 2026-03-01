@@ -184,7 +184,7 @@ def run_local_task(  # type: ignore[return]
                     cfg, logger, run_id, task, posix_inputs, container, container_env, stdlib
                 )
                 if task.effective_wdl_version not in ("draft-2", "1.0", "1.1"):
-                    task_env = _task_scoped_value(
+                    task_env = _task_runtime_info_struct_value(
                         cfg,
                         logger,
                         run_id,
@@ -224,7 +224,7 @@ def run_local_task(  # type: ignore[return]
 
                 # update task return code for output declarations
                 if task.effective_wdl_version not in ("draft-2", "1.0", "1.1"):
-                    task_env = _task_scoped_value(
+                    task_env = _task_runtime_info_struct_value(
                         cfg,
                         logger,
                         run_id,
@@ -607,7 +607,7 @@ def _normalize_task_runtime_info(info: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
-def _task_scoped_value(
+def _task_runtime_info_struct_value(
     cfg: config.Loader,
     logger: logging.Logger,
     run_id: str,
@@ -616,7 +616,7 @@ def _task_scoped_value(
     runtime_eval: Dict[str, Value.Base],
     return_code: Optional[int],
 ) -> Value.Struct:
-    task_type = task.runtime_scoped_type()
+    task_type = task.task_runtime_info_struct_type()
     container_overrides = _normalize_task_runtime_info(
         container.task_runtime_info(logger, runtime_eval)
     )

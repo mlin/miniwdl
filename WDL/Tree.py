@@ -322,9 +322,9 @@ class Task(SourceNode):
         # TODO: if the input section exists, then all postinputs decls must be
         #       bound
 
-    def runtime_scoped_type(self) -> Type.StructInstance:
+    def task_runtime_info_struct_type(self) -> Type.StructInstance:
         """
-        Build the synthetic struct type modeling WDL 1.2 task-scoped runtime info.
+        Build the synthetic task runtime info struct type (WDL 1.2+).
         """
 
         def meta_object_type(d: Dict[str, Any], name_prefix: str) -> Type.StructInstance:
@@ -473,7 +473,7 @@ class Task(SourceNode):
                 # Add task-scoped runtime info for typechecking task command & outputs (WDL 1.2+)
                 task_ctx = Decl(self.pos, Type.Any(), "task", id_prefix="task")
                 type_env_task = _add_struct_instance_to_type_env(
-                    "task", self.runtime_scoped_type(), type_env, ctx=task_ctx
+                    "task", self.task_runtime_info_struct_type(), type_env, ctx=task_ctx
                 )
             # Typecheck the command (string)
             errors.try1(
