@@ -577,8 +577,8 @@ class _DivisionOperator(_ArithmeticOperator):
         ans_type = self.infer_type(expr)
         lhs = arguments[0].coerce(ans_type).value
         rhs = arguments[1].coerce(ans_type).value
-        ans = lhs / rhs if ans_type == Type.Float() else lhs // rhs
-        if ans_type == Type.Int():
+        ans = lhs / rhs if isinstance(ans_type, Type.Float) else lhs // rhs
+        if isinstance(ans_type, Type.Int):
             assert isinstance(ans, int)
             return Value.Int(ans)
         assert isinstance(ans, float)
