@@ -40,7 +40,7 @@ class Base:
         self._interpolation_add = _InterpolationAddOperator()
         self._sub = _ArithmeticOperator("-", lambda l, r: l - r)
         self._mul = _ArithmeticOperator("*", lambda l, r: l * r)
-        self._div = _ArithmeticOperator("/", lambda l, r: l // r)
+        self._div = _DivisionOperator()
         self._rem = StaticFunction(
             "_rem", [Type.Int(), Type.Int()], Type.Int(), lambda l, r: Value.Int(l.value % r.value)
         )
@@ -560,11 +560,30 @@ class _ArithmeticOperator(EagerFunction):
     def _call_eager(self, expr: "Expr.Apply", arguments: List[Value.Base]) -> Value.Base:
         ans_type = self.infer_type(expr)
         ans = self.op(arguments[0].coerce(ans_type).value, arguments[1].coerce(ans_type).value)
-        if ans_type == Type.Int():
+        if isinstance(ans_type, Type.Int):
             assert isinstance(ans, int)
             return Value.Int(ans)
         assert isinstance(ans, float)
         return Value.Float(ans)
+
+
+class _DivisionOperator(_ArithmeticOperator):
+    # / operator performs integer division for Int operands, and true division for Float operands
+
+    def __init__(self) -> None:
+        super().__init__("/", lambda l, r: l // r)
+
+    def _call_eager(self, expr: "Expr.Apply", arguments: List[Value.Base]) -> Value.Base:
+        ans_type = self.infer_type(expr)
+        lhs = arguments[0].coerce(ans_type).value
+        rhs = arguments[1].coerce(ans_type).value
+        if isinstance(ans_type, Type.Float):
+            ans = lhs / rhs
+            assert isinstance(ans, float)
+            return Value.Float(ans)
+        ans = lhs // rhs
+        assert isinstance(ans, int)
+        return Value.Int(ans)
 
 
 class _AddOperator(_ArithmeticOperator):
