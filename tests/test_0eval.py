@@ -587,6 +587,12 @@ class TestEnv(unittest.TestCase):
 
 
 class TestValue(unittest.TestCase):
+    def test_parse_tsv_row_type(self):
+        rows = WDL.StdLib._parse_tsv("alpha\tbeta\n")
+        self.assertEqual(rows.json, [["alpha", "beta"]])
+        self.assertEqual(str(rows.type), "Array[Array[String]]+")
+        self.assertEqual(str(rows.value[0].type), "Array[String]+")
+
     def test_json(self):
         pty = WDL.Type.StructInstance("Person")
         pty.members = {

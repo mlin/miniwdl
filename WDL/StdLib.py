@@ -333,9 +333,7 @@ def _parse_boolean(s: str) -> Value.Boolean:
 
 def _parse_tsv(s: str) -> Value.Array:
     ans: List[Value.Base] = [
-        Value.Array(
-            Type.Array(Type.String()), [Value.String(field) for field in line.value.split("\t")]
-        )
+        Value.Array(Type.String(), [Value.String(field) for field in line.value.split("\t")])
         for line in _parse_lines(s).value
     ]
     return Value.Array(Type.Array(Type.String()), ans)
