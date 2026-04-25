@@ -310,7 +310,7 @@ def basename(*args) -> Value.String:
     if len(args) > 1:
         assert isinstance(args[1], Value.String)
         suffix = args[1].value
-        if path.endswith(suffix):
+        if suffix and path.endswith(suffix):
             path = path[: -len(suffix)]
     return Value.String(os.path.basename(path))
 
@@ -1133,20 +1133,23 @@ class _CollectByKey(EagerFunction):
         pairty = arg0ty.item_type
         assert isinstance(pairty, Type.Pair)
 
-        items: Dict[str, Tuple[Value.Base, List[Value.Base]]] = {}
+        items: List[Tuple[Value.Base, List[Value.Base]]] = []
         for p in arguments[0].value:
             assert isinstance(p, Value.Pair)
             ek = p.value[0].coerce(pairty.left_type)
             ev = p.value[1].coerce(pairty.right_type)
-            sk = str(ek)
-            if sk in items:
-                items[sk][1].append(ev)
-            else:
-                items[sk] = (ek, [ev])
+            found = False
+            for prior_k, prior_vs in items:
+                if ek == prior_k:
+                    prior_vs.append(ev)
+                    found = True
+                    break
+            if not found:
+                items.append((ek, [ev]))
 
         return Value.Map(
             (pairty.left_type, Type.Array(pairty.right_type)),
-            [(ek, Value.Array(pairty.right_type, evs)) for ek, evs in items.values()],
+            [(ek, Value.Array(pairty.right_type, evs)) for ek, evs in items],
             expr,
         )
 

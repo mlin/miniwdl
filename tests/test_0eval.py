@@ -157,10 +157,13 @@ class TestEval(unittest.TestCase):
             ("1--4/3","3"), # -4/3 == -2, is this right?
             ("1/2.0","0.500000"),
             ("5.0/2","2.500000"),
+            ("5.0/2.0","2.500000"),
             ("-1/2.0","-0.500000"),
             ("4%2","0"),
             ("4%3","1"),
             ("min(0,1)","0"),
+            ("min(1,3.14)","1.000000"),
+            ("max(1.0,0)","1.000000"),
             ("max(1,3.14)*2","6.280000"),
             ("1 + false", "(Ln 1, Col 1) Non-numeric operand to + operator", WDL.Error.IncompatibleOperand),
             ("min(max(0,1),true)", "(Ln 1, Col 1) Non-numeric operand to min operator", WDL.Error.IncompatibleOperand),
@@ -190,6 +193,18 @@ class TestEval(unittest.TestCase):
             ("3<2&&1>=0","false"),
             ("3<2&&1>=0||1==1","true"),
             ("1 == false", "(Ln 1, Col 1) Cannot compare Int and Boolean", WDL.Error.IncompatibleOperand)
+        )
+
+    def test_collect_by_key_float_keys(self):
+        self._test_tuples(
+            ("length(keys(collect_by_key([(1.0000001,\"a\"),(1.0000002,\"b\")])))", "2"),
+            ("as_map([(1.0000001,\"a\"),(1.0000002,\"b\")])[1.0000002]", '"b"'),
+        )
+
+    def test_basename_empty_suffix(self):
+        self._test_tuples(
+            ('basename("/path/to/file.txt","")', '"file.txt"'),
+            ('basename("file.txt","")', '"file.txt"'),
         )
 
     def test_str(self):
