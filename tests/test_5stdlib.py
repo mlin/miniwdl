@@ -42,6 +42,10 @@ class TestStdLib(unittest.TestCase):
             self.assertFalse(str(expected_exception) + " not raised")
         return WDL.values_to_json(outputs)
 
+    def test_parse_tsv_preserves_blank_lines(self):
+        parsed = WDL.StdLib._parse_tsv("a\tb\n\nc\td\n")
+        self.assertEqual(parsed.json, [["a", "b"], [""], ["c", "d"]])
+
     def test_eq_opt(self):
         # regression test issue #634
         wdl = """

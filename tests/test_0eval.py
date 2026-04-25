@@ -2,10 +2,6 @@ import unittest, inspect, json, random
 from .context import WDL
 
 class TestEval(unittest.TestCase):
-    def test_parse_tsv_preserves_blank_lines(self):
-        parsed = WDL.StdLib._parse_tsv("a\tb\n\nc\td\n")
-        self.assertEqual(parsed.json, [["a", "b"], [""], ["c", "d"]])
-
     def test_expr_render(self):
         # types
         self.assertEqual(str(WDL.parse_expr("false")), "false")
