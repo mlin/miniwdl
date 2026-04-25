@@ -202,9 +202,11 @@ class TestEval(unittest.TestCase):
         )
 
     def test_basename_empty_suffix(self):
+        env = WDL.Env.Bindings().bind("sfx", WDL.Value.Null())
         self._test_tuples(
             ('basename("/path/to/file.txt","")', '"file.txt"'),
             ('basename("file.txt","")', '"file.txt"'),
+            ('basename("/path/to/file.txt",sfx)', '"file.txt"', env),
         )
 
     def test_str(self):

@@ -307,7 +307,7 @@ def basename(*args) -> Value.String:
     assert len(args) in (1, 2)
     assert isinstance(args[0], Value.String)
     path = args[0].value
-    if len(args) > 1:
+    if len(args) > 1 and not isinstance(args[1], Value.Null):
         assert isinstance(args[1], Value.String)
         suffix = args[1].value
         if suffix and path.endswith(suffix):
