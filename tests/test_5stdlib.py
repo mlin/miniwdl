@@ -46,6 +46,56 @@ class TestStdLib(unittest.TestCase):
         parsed = WDL.StdLib._parse_tsv("a\tb\n\nc\td\n")
         self.assertEqual(parsed.json, [["a", "b"], [""], ["c", "d"]])
 
+    def _eval_expr(self, expr: str, env=None, version: str = "development"):
+        env = env or WDL.Env.Bindings()
+        type_env = WDL.Env.Bindings()
+        for binding in env:
+            type_env = type_env.bind(binding.name, binding.value.type)
+        stdlib = WDL.StdLib.Base(version)
+        ex = WDL.parse_expr(expr, version=version).infer_type(type_env, stdlib)
+        return ex.eval(env, stdlib)
+
+    def test_collect_by_key_float_keys(self):
+        self.assertEqual(
+            str(self._eval_expr('length(keys(collect_by_key([(1.0000001,"a"),(1.0000002,"b")])))')),
+            "2",
+        )
+        self.assertEqual(
+            str(self._eval_expr('as_map([(1.0000001,"a"),(1.0000002,"b")])[1.0000002]')),
+            '"b"',
+        )
+
+    def test_zip_cross_nonempty_inference(self):
+        stdlib = WDL.StdLib.Base("development")
+        self.assertEqual(
+            str(
+                WDL.parse_expr("cross([1], range(0))", version="development")
+                .infer_type([], stdlib)
+                .type
+            ),
+            "Array[Pair[Int,Int]]",
+        )
+        self.assertEqual(
+            str(
+                WDL.parse_expr("zip([1], [2])", version="development")
+                .infer_type([], stdlib)
+                .type
+            ),
+            "Array[Pair[Int,Int]]+",
+        )
+
+    def test_basename_empty_suffix(self):
+        env = WDL.Env.Bindings().bind("sfx", WDL.Value.Null())
+        self.assertEqual(str(self._eval_expr('basename("/path/to/file.txt","")')), '"file.txt"')
+        self.assertEqual(str(self._eval_expr('basename("file.txt","")')), '"file.txt"')
+        self.assertEqual(str(self._eval_expr('basename("/path/to/file.txt",sfx)', env=env)), '"file.txt"')
+
+    def test_parse_tsv_row_type(self):
+        rows = WDL.StdLib._parse_tsv("alpha\tbeta\n")
+        self.assertEqual(rows.json, [["alpha", "beta"]])
+        self.assertEqual(str(rows.type), "Array[Array[String]]+")
+        self.assertEqual(str(rows.value[0].type), "Array[String]+")
+
     def test_eq_opt(self):
         # regression test issue #634
         wdl = """
