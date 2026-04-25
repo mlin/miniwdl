@@ -201,6 +201,25 @@ class TestEval(unittest.TestCase):
             ("as_map([(1.0000001,\"a\"),(1.0000002,\"b\")])[1.0000002]", '"b"'),
         )
 
+    def test_zip_cross_nonempty_inference(self):
+        stdlib = WDL.StdLib.Base("development")
+        self.assertEqual(
+            str(
+                WDL.parse_expr("cross([1], range(0))", version="development")
+                .infer_type([], stdlib)
+                .type
+            ),
+            "Array[Pair[Int,Int]]",
+        )
+        self.assertEqual(
+            str(
+                WDL.parse_expr("zip([1], [2])", version="development")
+                .infer_type([], stdlib)
+                .type
+            ),
+            "Array[Pair[Int,Int]]+",
+        )
+
     def test_basename_empty_suffix(self):
         env = WDL.Env.Bindings().bind("sfx", WDL.Value.Null())
         self._test_tuples(

@@ -815,7 +815,7 @@ class _ZipOrCross(EagerFunction):
             raise Error.IndeterminateType(expr.arguments[1], "can't infer item type of empty array")
         return Type.Array(
             Type.Pair(arg0ty.item_type, arg1ty.item_type),
-            nonempty=(arg0ty.nonempty or arg1ty.nonempty),
+            nonempty=(arg0ty.nonempty and arg1ty.nonempty),
         )
 
     def _coerce_args(
