@@ -532,6 +532,8 @@ class TestStdLib(unittest.TestCase):
                 echo -e "key1\tvalue1" > map.txt
                 echo -e "key2\tvalue2" >> map.txt
                 echo -e "..\ttricky" >> map.txt
+                printf 'line1\r\n\r\nline3\r\n' > crlf_lines.txt
+                printf 'k1\tv1\r\nk2\tv2\r\n' > crlf_map.txt
             }
             output {
                 String i_strings_string = i1
@@ -540,6 +542,9 @@ class TestStdLib(unittest.TestCase):
                 Array[String] i_strings_lines = i2
                 Array[String] o_strings_lines = read_lines(strings2)
                 Array[String] o_names_lines = read_lines(stdout())
+                Array[String] o_crlf_lines = read_lines("crlf_lines.txt")
+                Array[Array[String]] o_crlf_tsv = read_tsv("crlf_map.txt")
+                Map[String,String] o_crlf_map = read_map("crlf_map.txt")
                 Int o_fortytwo = read_int("fortytwo.txt")
                 Float o_mole = read_float("mole.txt")
                 Array[Boolean] o_boolean = [read_boolean("true.txt"), read_boolean("false.txt")]
@@ -553,6 +558,9 @@ class TestStdLib(unittest.TestCase):
         self.assertEqual(outputs["i_strings_lines"], ["foo", "bar", "bas"])
         self.assertEqual(outputs["o_strings_lines"], ["foo", "bar", "bas"])
         self.assertEqual(outputs["o_names_lines"], ["Alyssa", "Ben"])
+        self.assertEqual(outputs["o_crlf_lines"], ["line1", "", "line3"])
+        self.assertEqual(outputs["o_crlf_tsv"], [["k1", "v1"], ["k2", "v2"]])
+        self.assertEqual(outputs["o_crlf_map"], {"k1": "v1", "k2": "v2"})
         self.assertEqual(outputs["o_fortytwo"], 42)
         self.assertEqual(outputs["o_boolean"], [True, False])
         self.assertEqual(outputs["o_map"], {"key1": "value1", "key2": "value2", "..": "tricky"})

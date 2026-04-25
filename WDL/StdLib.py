@@ -318,7 +318,10 @@ def basename(*args) -> Value.String:
 def _parse_lines(s: str) -> Value.Array:
     ans: List[Value.Base] = []
     if s:
-        ans = [Value.String(line) for line in (s[:-1] if s.endswith("\n") else s).split("\n")]
+        ans = [
+            Value.String(line.rstrip("\r"))
+            for line in (s[:-1] if s.endswith("\n") else s).split("\n")
+        ]
     return Value.Array(Type.String(), ans)
 
 
