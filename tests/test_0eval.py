@@ -602,6 +602,15 @@ class TestValue(unittest.TestCase):
             else:
                 self.assertEqual(t[1], WDL.Value.from_json(t[0],t[1]).json)
 
+        with self.assertRaises(WDL.Error.RuntimeError):
+            WDL.Value.Map(
+                (WDL.Type.Float(), WDL.Type.String()),
+                [
+                    (WDL.Value.Float(1.0000001), WDL.Value.String("a")),
+                    (WDL.Value.Float(1.0000002), WDL.Value.String("b")),
+                ],
+            ).json
+
         stdlib = WDL.StdLib.Base("1.0")
         self.assertEqual(
             WDL.parse_expr('object {"name": "Alyssa", "age": 42, "address": "No 4, Privet Drive"}',
