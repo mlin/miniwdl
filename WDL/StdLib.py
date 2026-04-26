@@ -307,10 +307,10 @@ def basename(*args) -> Value.String:
     assert len(args) in (1, 2)
     assert isinstance(args[0], Value.String)
     path = args[0].value
-    if len(args) > 1:
+    if len(args) > 1 and not isinstance(args[1], Value.Null):
         assert isinstance(args[1], Value.String)
         suffix = args[1].value
-        if path.endswith(suffix):
+        if suffix and path.endswith(suffix):
             path = path[: -len(suffix)]
     return Value.String(os.path.basename(path))
 
@@ -333,9 +333,7 @@ def _parse_boolean(s: str) -> Value.Boolean:
 
 def _parse_tsv(s: str) -> Value.Array:
     ans: List[Value.Base] = [
-        Value.Array(
-            Type.Array(Type.String()), [Value.String(field) for field in line.value.split("\t")]
-        )
+        Value.Array(Type.String(), [Value.String(field) for field in line.value.split("\t")])
         for line in _parse_lines(s).value
     ]
     return Value.Array(Type.Array(Type.String()), ans)
@@ -815,7 +813,7 @@ class _ZipOrCross(EagerFunction):
             raise Error.IndeterminateType(expr.arguments[1], "can't infer item type of empty array")
         return Type.Array(
             Type.Pair(arg0ty.item_type, arg1ty.item_type),
-            nonempty=(arg0ty.nonempty or arg1ty.nonempty),
+            nonempty=(arg0ty.nonempty and arg1ty.nonempty),
         )
 
     def _coerce_args(
@@ -1133,20 +1131,27 @@ class _CollectByKey(EagerFunction):
         pairty = arg0ty.item_type
         assert isinstance(pairty, Type.Pair)
 
-        items: Dict[str, Tuple[Value.Base, List[Value.Base]]] = {}
+        items: List[Tuple[Value.Base, List[Value.Base]]] = []
+        buckets: Dict[str, List[int]] = {}
         for p in arguments[0].value:
             assert isinstance(p, Value.Pair)
             ek = p.value[0].coerce(pairty.left_type)
             ev = p.value[1].coerce(pairty.right_type)
-            sk = str(ek)
-            if sk in items:
-                items[sk][1].append(ev)
-            else:
-                items[sk] = (ek, [ev])
+            bucket_key = f"{str(ek.type)}::{json.dumps(ek.json, sort_keys=True)}"
+            found = False
+            for i in buckets.get(bucket_key, []):
+                prior_k, prior_vs = items[i]
+                if ek == prior_k:
+                    prior_vs.append(ev)
+                    found = True
+                    break
+            if not found:
+                items.append((ek, [ev]))
+                buckets.setdefault(bucket_key, []).append(len(items) - 1)
 
         return Value.Map(
             (pairty.left_type, Type.Array(pairty.right_type)),
-            [(ek, Value.Array(pairty.right_type, evs)) for ek, evs in items.values()],
+            [(ek, Value.Array(pairty.right_type, evs)) for ek, evs in items],
             expr,
         )
 
