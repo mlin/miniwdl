@@ -3,7 +3,7 @@ import math
 import os
 import json
 import tempfile
-from typing import List, Tuple, Callable, IO, Optional
+from typing import List, Tuple, Dict, Callable, IO, Optional
 from abc import ABC, abstractmethod
 from contextlib import suppress
 import regex
@@ -1132,18 +1132,22 @@ class _CollectByKey(EagerFunction):
         assert isinstance(pairty, Type.Pair)
 
         items: List[Tuple[Value.Base, List[Value.Base]]] = []
+        buckets: Dict[str, List[int]] = {}
         for p in arguments[0].value:
             assert isinstance(p, Value.Pair)
             ek = p.value[0].coerce(pairty.left_type)
             ev = p.value[1].coerce(pairty.right_type)
+            bucket_key = f"{str(ek.type)}::{json.dumps(ek.json, sort_keys=True)}"
             found = False
-            for prior_k, prior_vs in items:
+            for i in buckets.get(bucket_key, []):
+                prior_k, prior_vs = items[i]
                 if ek == prior_k:
                     prior_vs.append(ev)
                     found = True
                     break
             if not found:
                 items.append((ek, [ev]))
+                buckets.setdefault(bucket_key, []).append(len(items) - 1)
 
         return Value.Map(
             (pairty.left_type, Type.Array(pairty.right_type)),
