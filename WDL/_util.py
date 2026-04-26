@@ -29,14 +29,16 @@ from typing import (
     TYPE_CHECKING,
 )
 from types import FrameType
+import importlib
 from importlib.util import find_spec
 
 # Prefer the non-deprecated import path, but keep compatibility with python-json-logger
 # 2.0.7 while conda-forge catches up: https://github.com/conda-forge/python-json-logger-feedstock/issues/19
-if find_spec("pythonjsonlogger.json") is not None:
-    from pythonjsonlogger import json as jsonlogger
-else:
-    from pythonjsonlogger import jsonlogger
+jsonlogger_mod: Any = importlib.import_module(
+    "pythonjsonlogger.json"
+    if find_spec("pythonjsonlogger.json") is not None
+    else "pythonjsonlogger.jsonlogger"
+)
 
 if TYPE_CHECKING:
     from . import Env, Value
@@ -284,7 +286,7 @@ class StructuredLogMessage:
         return f"{self.message} :: {', '.join(k + ': ' + json.dumps(v) for k, v in self.kwargs.items())}"
 
 
-class StructuredLogMessageJSONFormatter(jsonlogger.JsonFormatter):
+class StructuredLogMessageJSONFormatter(jsonlogger_mod.JsonFormatter):
     "JSON formatter for StructuredLogMessages"
 
     def format(self, rec: logging.LogRecord) -> str:
