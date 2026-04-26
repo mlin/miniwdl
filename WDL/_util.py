@@ -29,7 +29,7 @@ from typing import (
     TYPE_CHECKING,
 )
 from types import FrameType
-from pythonjsonlogger import jsonlogger
+from pythonjsonlogger import json as jsonlogger
 
 if TYPE_CHECKING:
     from . import Env, Value
