@@ -667,20 +667,11 @@ def _task_runtime_info_struct_value(
     assert isinstance(task_value, Value.Struct)
     assert task_type.members is not None
     for key, override in container_overrides.items():
-        if isinstance(override, Value.Base):
-            task_value.value[key] = (
-                override.coerce(task_type.members[key]) if key in task_type.members else override
-            )
-            if key not in task_type.members:
-                task_value.extra.add(key)
-            continue
-        try:
-            ty = task_type.members[key] if key in task_type.members else Type.Any()
-            task_value.value[key] = Value.from_json(ty, override)
-            if key not in task_type.members:
-                task_value.extra.add(key)
-        except Error.InputError as ex:
-            raise AssertionError("task-scoped runtime info override failed conversion") from ex
+        task_value.value[key] = (
+            override.coerce(task_type.members[key]) if key in task_type.members else override
+        )
+        if key not in task_type.members:
+            task_value.extra.add(key)
 
     try:
         task_value.coerce(task_type)
