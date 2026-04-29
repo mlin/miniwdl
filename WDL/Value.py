@@ -231,6 +231,8 @@ class Array(Base):
 class Map(Base):
     value: List[Tuple[Base, Base]]
     type: Type.Map
+    _index: Optional[Dict[Any, Base]]
+    _index_failed: bool
 
     def __init__(
         self,
@@ -240,7 +242,28 @@ class Map(Base):
     ) -> None:
         self.value = []
         self.type = Type.Map(item_type)
+        self._index = None
+        self._index_failed = False
         super().__init__(self.type, value, expr)
+
+    def get(self, key: Base) -> Optional[Base]:
+        if not self._index_failed and self._index is None:
+            try:
+                self._index = {self._index_key(k): v for k, v in self.value}
+            except TypeError:
+                # Some legal WDL map key types (e.g. arrays) may be unhashable as Python dict keys.
+                self._index_failed = True
+                self._index = None
+        if self._index is not None:
+            return self._index.get(self._index_key(key))
+        for k, v in self.value:
+            if key == k:
+                return v
+        return None
+
+    @staticmethod
+    def _index_key(key: Base) -> Any:
+        return key.value
 
     @property
     def json(self) -> Any:

@@ -461,10 +461,7 @@ class _At(EagerFunction):
             mkey = rhs
             if isinstance(mty, Type.Map):
                 mkey = mkey.coerce(mty.item_type[0])
-            ans = None
-            for k, v in lhs.value:
-                if mkey == k:
-                    ans = v
+            ans = lhs.get(mkey)
             if ans is None:
                 raise Error.OutOfBounds(expr.arguments[1], "Map key not found")
             return ans
