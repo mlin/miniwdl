@@ -15,6 +15,7 @@ given a suitable ``WDL.Env.Bindings[Value.Base]``.
 from abc import ABC, abstractmethod
 from typing import List, Optional, Dict, Tuple, Union, Iterable, Set, TYPE_CHECKING
 import codecs
+import warnings
 import regex
 from .Error import SourcePosition, SourceNode
 from . import Type, Value, Env, Error, StdLib, Any
@@ -436,8 +437,15 @@ class String(Base):
 
         # FIXME (issue #661): reject unicode-escape sequences that aren't allowed by the WDL spec
         try:
+
+            def decode_ascii(match: regex.Match) -> str:
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=DeprecationWarning)
+                    return codecs.decode(match.group(0), "unicode-escape")
+
             return String._ASCII_PARTS_RE.sub(
-                lambda match: codecs.decode(match.group(0), "unicode-escape"), s
+                decode_ascii,
+                s,
             )
         except (SyntaxError, ValueError, UnicodeError):
             raise Error._BadCharacterEncoding(pos)
