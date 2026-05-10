@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 import logging
 import tempfile
 import os
@@ -1229,6 +1230,50 @@ class TestTaskRunner(unittest.TestCase):
             self._test_task(txt, {"x": 1}, _plugins=[my_plugin])
         except WDL.runtime.error.CommandFailed as exn:
             self.assertEqual(exn.exit_status, 42)
+
+    def test_task_attempt_command_retry(self):
+        from WDL.runtime.task_container import TaskContainer
+
+        class FakeContainer(TaskContainer):
+            @classmethod
+            def global_init(cls, cfg, logger):
+                pass
+
+            @classmethod
+            def detect_resource_limits(cls, cfg, logger):
+                return {"cpu": 1, "mem_bytes": 1024 * 1024 * 1024}
+
+            def _run(self, logger, terminating, command):
+                with open(self.host_stdout_txt(), "w") as outfile:
+                    outfile.write(command.strip() + "\n")
+                with open(self.host_stderr_txt(), "w") as outfile:
+                    outfile.write("")
+                return 1 if self.try_counter == 1 else 0
+
+        def fake_container(cfg, logger, run_id, host_dir):
+            return FakeContainer(cfg, run_id, host_dir)
+
+        txt = R"""
+        version 1.2
+        task retry {
+            command <<<
+                ~{task.attempt}
+            >>>
+            output {
+                String command_attempt = read_string(stdout())
+                Int output_attempt = task.attempt
+                Int? return_code = task.return_code
+            }
+            runtime {
+                maxRetries: 1
+            }
+        }
+        """
+        with patch("WDL.runtime.task_container.new", fake_container):
+            outputs = self._test_task(txt)
+        self.assertEqual(outputs["command_attempt"], "1")
+        self.assertEqual(outputs["output_attempt"], 1)
+        self.assertEqual(outputs["return_code"], 0)
 
     def test_runtime_privileged(self):
         txt = R"""

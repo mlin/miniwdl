@@ -184,37 +184,40 @@ def run_local_task(  # type: ignore[return]
                 _eval_task_runtime(
                     cfg, logger, run_id, task, posix_inputs, container, container_env, stdlib
                 )
-                if wdl_version_geq(task.effective_wdl_version, WDLVersion.V1_2):
+                task_runtime_info = wdl_version_geq(task.effective_wdl_version, WDLVersion.V1_2)
+                if task_runtime_info:
                     container.build_task_runtime_info_struct(logger, run_id, task)
-                    assert container.task_runtime_info_struct is not None
-                    container_env = container_env.bind("task", container.task_runtime_info_struct)
 
-                # interpolate command
-                old_command_dedent = cfg["task_runtime"].get_bool("old_command_dedent")
-                # pylint: disable=E1101
-                placeholder_re = regex.compile(
-                    cfg["task_runtime"]["placeholder_regex"], flags=regex.POSIX
-                )
-                setattr(
-                    stdlib,
-                    "_placeholder_regex",
-                    placeholder_re,
-                )  # hack to pass regex to WDL.Expr.Placeholder._eval
-                assert isinstance(task.command, Expr.TaskCommand)
-                command = task.command.eval(
-                    container_env, stdlib, dedent=not old_command_dedent
-                ).value
-                delattr(stdlib, "_placeholder_regex")
-                if old_command_dedent:  # see issue #674
-                    command = _util.strip_leading_whitespace(command)[1]
-                logger.debug(_("command", command=command.strip()))
+                def interpolate_command() -> str:
+                    command_env = container_env
+                    if task_runtime_info:
+                        assert container.task_runtime_info_struct is not None
+                        command_env = command_env.bind("task", container.task_runtime_info_struct)
+                    return _eval_task_command(cfg, logger, task, command_env, stdlib)
+
+                command = interpolate_command()
 
                 # process command & container through plugins
                 recv = plugins.send({"command": command, "container": container})
-                command, container = (recv[k] for k in ("command", "container"))
+                processed_command, container = (recv[k] for k in ("command", "container"))
+                # Preserve the existing plugin protocol: plugins receive one command string.
+                # If they don't alter it, retries can re-interpolate command placeholders.
+                command_or_interpolator: Union[str, Callable[[], str]] = processed_command
+                if processed_command == command:
+                    first_command: Optional[str] = command
+
+                    def retry_command() -> str:
+                        nonlocal first_command
+                        if first_command is not None:
+                            ans = first_command
+                            first_command = None
+                            return ans
+                        return interpolate_command()
+
+                    command_or_interpolator = retry_command
 
                 # start container & run command (and retry if needed)
-                _try_task(cfg, task, logger, container, command, terminating)
+                _try_task(cfg, task, logger, container, command_or_interpolator, terminating)
 
                 # bind output declarations to task runtime info with the final return code
                 if wdl_version_geq(task.effective_wdl_version, WDLVersion.V1_2):
@@ -591,12 +594,37 @@ def _eval_task_runtime(
         logger.warning(_("ignored runtime settings", keys=unused_keys))
 
 
+def _eval_task_command(
+    cfg: config.Loader,
+    logger: logging.Logger,
+    task: Tree.Task,
+    env: Env.Bindings[Value.Base],
+    stdlib: "InputStdLib",
+) -> str:
+    """
+    Interpolate the task command template against the supplied environment.
+    """
+    old_command_dedent = cfg["task_runtime"].get_bool("old_command_dedent")
+    placeholder_re = regex.compile(cfg["task_runtime"]["placeholder_regex"], flags=regex.POSIX)
+    # Hack to pass regex to WDL.Expr.Placeholder._eval
+    setattr(stdlib, "_placeholder_regex", placeholder_re)
+    try:
+        assert isinstance(task.command, Expr.TaskCommand)
+        command = task.command.eval(env, stdlib, dedent=not old_command_dedent).value
+    finally:
+        delattr(stdlib, "_placeholder_regex")
+    if old_command_dedent:  # see issue #674
+        command = _util.strip_leading_whitespace(command)[1]
+    logger.debug(_("command", command=command.strip()))
+    return command
+
+
 def _try_task(
     cfg: config.Loader,
     task: Tree.Task,
     logger: logging.Logger,
     container: "TaskContainer",
-    command: str,
+    command: Union[str, Callable[[], str]],
     terminating: Callable[[], bool],
 ) -> None:
     """
@@ -636,9 +664,7 @@ def _try_task(
                         attempt=Value.Int(max(0, container.try_counter - 1)),
                         return_code=Value.Null(),
                     )
-                    # FIXME: The command has already been interpolated, so retry attempts won't see
-                    # the updated task.attempt value; output declarations will.
-                return container.run(logger, command)
+                return container.run(logger, command() if callable(command) else command)
             finally:
                 if host_tmpdir:
                     logger.info(_("deleting task temp directory", TMPDIR=host_tmpdir))
