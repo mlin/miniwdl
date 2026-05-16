@@ -134,9 +134,7 @@ class Base:
         static([Type.Array(Type.String())], Type.File(), "write_lines")(
             self._write(_serialize_lines)
         )
-        static([Type.Array(Type.Array(Type.String()))], Type.File(), "write_tsv")(
-            self._write(_serialize_tsv)
-        )
+        self.write_tsv = _WriteTsv(self)
         static([Type.Map((Type.Any(), Type.Any()))], Type.File(), "write_map")(
             self._write(_serialize_map)
         )
@@ -471,6 +469,26 @@ def _serialize_tsv(v: Value.Base, outfile: IO[bytes]) -> None:
         ),
         outfile,
     )
+
+
+def _serialize_tsv_objects(v: Value.Base, outfile: IO[bytes], *, header: bool = False) -> None:
+    assert isinstance(v, Value.Array)
+    rows: List[Value.Base] = []
+    map_columns: Optional[List[str]] = None
+    for row in v.value:
+        if not isinstance(row, Value.Map):
+            raise ValueError("write_tsv(): unsupported row type")
+        columns = [k.coerce(Type.String()).value for (k, _) in row.value]
+        if len(set(columns)) < len(columns):
+            raise ValueError("write_tsv(): object column names must be unique")
+        if map_columns is None:
+            map_columns = columns
+            if header:
+                rows.append(Value.String("\t".join(columns)))
+        elif columns != map_columns:
+            raise ValueError("write_tsv(): object rows must have matching keys in matching order")
+        rows.append(Value.String("\t".join(v.coerce(Type.String()).value for (_, v) in row.value)))
+    _serialize_lines(Value.Array(Type.String(), rows), outfile)
 
 
 def _serialize_map(map: Value.Base, outfile: IO[bytes]) -> None:
@@ -972,6 +990,65 @@ class _ReadTsv(EagerFunction):
             if str(exn):
                 msg += ", " + str(exn)
             raise Error.EvalError(expr, msg) from exn
+
+
+class _WriteTsv(EagerFunction):
+    stdlib: Base
+
+    def __init__(self, stdlib: Base) -> None:
+        self.stdlib = stdlib
+
+    def infer_type(self, expr: "Expr.Apply") -> Type.Base:
+        if not expr.arguments:
+            raise Error.WrongArity(expr, 1)
+        if len(expr.arguments) > 2:
+            raise Error.WrongArity(expr, 2)
+        arg0ty = expr.arguments[0].type
+        row_tsv = Type.Array(Type.String())
+        row_obj = Type.Map((Type.String(), Type.String()))
+        if isinstance(arg0ty, Type.Array) and (
+            arg0ty.item_type.coerces(row_tsv) or arg0ty.item_type.coerces(row_obj)
+        ):
+            pass
+        else:
+            raise Error.StaticTypeMismatch(
+                expr.arguments[0], Type.Array(Type.Any()), arg0ty, "for write_tsv argument #1"
+            )
+        if len(expr.arguments) == 2:
+            if not wdl_version_geq(self.stdlib.wdl_version, WDLVersion.V1_2):
+                raise Error.WrongArity(expr, 1)
+            try:
+                expr.arguments[1].typecheck(Type.Boolean())
+            except Error.StaticTypeMismatch:
+                raise Error.StaticTypeMismatch(
+                    expr.arguments[1],
+                    Type.Boolean(),
+                    expr.arguments[1].type,
+                    "for write_tsv argument #2",
+                ) from None
+            if arg0ty.item_type.coerces(row_tsv):
+                raise Error.StaticTypeMismatch(
+                    expr.arguments[0],
+                    Type.Array(row_obj),
+                    arg0ty,
+                    "write_tsv(Array[Array[String]], Boolean) is not supported",
+                )
+        return Type.File()
+
+    def _call_eager(self, expr: "Expr.Apply", arguments: List[Value.Base]) -> Value.Base:
+        header = False
+        if len(arguments) == 2:
+            header = arguments[1].coerce(Type.Boolean()).value
+        arg0ty = expr.arguments[0].type
+        assert isinstance(arg0ty, Type.Array)
+        object_rows = arg0ty.item_type.coerces(Type.Map((Type.String(), Type.String())))
+        return self.stdlib._write(
+            lambda v, outfile: (
+                _serialize_tsv_objects(v, outfile, header=header)
+                if object_rows
+                else _serialize_tsv(v, outfile)
+            )
+        )(arguments[0])
 
 
 class _SelectFirst(EagerFunction):
