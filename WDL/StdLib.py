@@ -201,6 +201,7 @@ class Base:
             self.chunk = _Chunk()
             self.values = _Values()
             self.contains_key = _ContainsKey()
+            self.join_paths = _JoinPaths()
 
     def _read(self, parse: Callable[[str], Value.Base]) -> Callable[[Value.File], Value.Base]:
         "generate read_* function implementation based on parse"
@@ -1878,3 +1879,49 @@ class _ContainsKey(EagerFunction):
 
         # Successfully navigated the entire key path
         return Value.Boolean(True)
+
+
+class _JoinPaths(EagerFunction):
+    # String join_paths(Directory, String)
+    # String join_paths(Directory, Array[String]+)
+    # String join_paths(Array[String]+)
+
+    def infer_type(self, expr: "Expr.Apply") -> Type.Base:
+        if len(expr.arguments) not in (1, 2):
+            raise Error.WrongArity(expr, 2)
+        if len(expr.arguments) == 1:
+            expr.arguments[0].typecheck(Type.Array(Type.String()))
+            return Type.String()
+
+        expr.arguments[0].typecheck(Type.Directory())
+        arg2ty = expr.arguments[1].type
+        if isinstance(arg2ty, Type.String):
+            return Type.String()
+        if isinstance(arg2ty, Type.Array) and isinstance(arg2ty.item_type, Type.String):
+            return Type.String()
+        raise Error.StaticTypeMismatch(
+            expr.arguments[1], Type.String(), arg2ty, "for join_paths() argument #2"
+        )
+
+    def _call_eager(self, expr: "Expr.Apply", arguments: List[Value.Base]) -> Value.Base:
+        if len(arguments) == 1:
+            segments = arguments[0].coerce(Type.Array(Type.String())).value
+        else:
+            base = arguments[0].coerce(Type.Directory()).value
+            rhs = arguments[1]
+            if isinstance(rhs, Value.Array):
+                segments = [Value.String(base)] + rhs.coerce(Type.Array(Type.String())).value
+            else:
+                segments = [Value.String(base), rhs.coerce(Type.String())]
+
+        if not segments:
+            raise Error.EvalError(expr, "join_paths() requires at least one path segment")
+
+        segment_strings = [seg.coerce(Type.String()).value for seg in segments]
+        for i, segment in enumerate(segment_strings[1:], start=2):
+            if os.path.isabs(segment):
+                raise Error.EvalError(
+                    expr,
+                    f"join_paths() only allows an absolute path in the first segment (segment #{i})",
+                )
+        return Value.String(os.path.join(*segment_strings))

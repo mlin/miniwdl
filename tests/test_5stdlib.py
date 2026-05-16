@@ -1,10 +1,8 @@
-from math import exp
 import unittest
 import logging
 import tempfile
 import os
 import json
-import docker
 from .context import WDL
 
 class TestStdLib(unittest.TestCase):
@@ -242,7 +240,7 @@ class TestStdLib(unittest.TestCase):
         doc.typecheck()
 
 
-    def test_stdlib_branch_coverage_length_contains_key(self):
+    def test_stdlib_branch_coverage_length_contains_key_join_paths(self):
         # length(): wrong arity and optional argument rejection during quantifier checks
         with self.assertRaises(WDL.Error.WrongArity):
             self._eval_expr("length([1], [2])", version="1.2")
@@ -287,6 +285,38 @@ class TestStdLib(unittest.TestCase):
         self.assertEqual(str(self._eval_expr('contains_key({"a": 1}, ["a", "b"])', version="1.2")), "false")
         env = WDL.Env.Bindings().bind("path", WDL.Value.Array(WDL.Type.String(), []))
         self.assertEqual(str(self._eval_expr('contains_key({"a": 1}, path)', env=env, version="1.2")), "false")
+
+        # join_paths(): static type checks
+        with self.assertRaises(WDL.Error.WrongArity):
+            self._eval_expr('join_paths("a", "b", "c")', version="1.2")
+        with self.assertRaises(WDL.Error.StaticTypeMismatch):
+            self._eval_expr('join_paths(1)', version="1.2")
+        with self.assertRaises(WDL.Error.StaticTypeMismatch):
+            self._eval_expr('join_paths("base", 1)', version="1.2")
+        with self.assertRaises(WDL.Error.StaticTypeMismatch):
+            self._eval_expr('join_paths("base", [1])', version="1.2")
+
+        # join_paths(): successful overloads
+        self.assertEqual(
+            str(self._eval_expr('join_paths(["/a", "b", "c"])', version="1.2")),
+            '"/a/b/c"',
+        )
+        self.assertEqual(
+            str(self._eval_expr('join_paths("/a", "b/c")', version="1.2")),
+            '"/a/b/c"',
+        )
+        self.assertEqual(
+            str(self._eval_expr('join_paths("/a", ["b", "c"])', version="1.2")),
+            '"/a/b/c"',
+        )
+
+        # join_paths(): runtime path constraints
+        with self.assertRaises(WDL.Error.EvalError):
+            self._eval_expr('join_paths([])', version="1.2")
+        with self.assertRaises(WDL.Error.EvalError):
+            self._eval_expr('join_paths(["/a", "/b"])', version="1.2")
+        with self.assertRaises(WDL.Error.EvalError):
+            self._eval_expr('join_paths("/a", ["/b"])', version="1.2")
 
     def test_collect_by_key_float_keys(self):
         self.assertEqual(
