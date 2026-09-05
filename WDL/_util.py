@@ -2,6 +2,8 @@
 
 import sys
 import os
+import re
+import codecs
 import json
 import logging
 import signal
@@ -14,10 +16,13 @@ import decimal
 from time import sleep
 from datetime import datetime
 from enum import IntEnum
-from contextlib import contextmanager, AbstractContextManager
+from contextlib import contextmanager, suppress, AbstractContextManager
 from typing import (
     Tuple,
     Dict,
+    Union,
+    NamedTuple,
+    BinaryIO,
     Set,
     Iterator,
     List,
@@ -487,53 +492,147 @@ def configure_logger(
                 sys.stderr.write(ANSI.SHOW_CURSOR)  # un-hide cursor
 
 
+_TAIL_CHUNK_BYTES = 65536
+_TAIL_MAX_LINE = 4096
+
+# Line terminators recognized when tailing a log file. As with python's universal newlines (which
+# the previous implementation got for free by reading the file in text mode), a lone \r also
+# terminates a line -- otherwise a CLI tool's \r-delimited progress bar would read as one
+# ever-growing line, and trip the oversized-line guard below.
+_TAIL_EOL = re.compile(r"\r\n|\r|\n")
+
+
+class _TailStream(NamedTuple):
+    """The open log file, its incremental UTF-8 decoder, and the partial trailing line to carry
+    into the next poll."""
+
+    fh: BinaryIO
+    decoder: codecs.IncrementalDecoder
+    leftover: str = ""
+
+
+class _TailStopped:
+    """We gave up on the file after an error, closed it, and won't read it again."""
+
+
+_TAIL_STOPPED = _TailStopped()
+
+# Tailing is in one of three states: not opened yet (None -- each poll retries, since the writer
+# may not have created the file), streaming, or stopped.
+_TailState = Union[None, _TailStream, _TailStopped]
+
+
+def _tail_close(state: _TailState) -> _TailStopped:
+    """Close the file if it's open and return the terminal state. The only way to stop."""
+    if isinstance(state, _TailStream):
+        with suppress(Exception):  # a failure closing a read handle isn't actionable
+            state.fh.close()
+    return _TAIL_STOPPED
+
+
+def _tail_emit_lines(buf: str, final: bool, emit: Callable[[str], None]) -> str:
+    r"""
+    Feed each complete line in ``buf`` to ``emit``, normalized to a single trailing \n, and return
+    the leftover partial line for the caller to carry into the next call. Holds no state of its
+    own, and emits as it scans rather than accumulating. Raises if a line exceeds _TAIL_MAX_LINE.
+
+    Unless ``final``, a \r at the very end of ``buf`` is left in the leftover rather than taken as
+    a terminator, since the writer may yet complete it into \r\n.
+    """
+    start = 0
+    while True:
+        eol = _TAIL_EOL.search(buf, start)
+        if not eol or (not final and eol.group() == "\r" and eol.end() == len(buf)):
+            return buf[start:]
+        if eol.start() - start >= _TAIL_MAX_LINE:
+            raise RuntimeError(f"log line exceeds {_TAIL_MAX_LINE} characters")
+        emit(buf[start : eol.start()] + "\n")
+        start = eol.end()
+
+
 @export
 @contextmanager
-def PygtailLogger(
+def TailLogger(
     logger: logging.Logger,
     filename: str,
     callback: Optional[Callable[[str], None]] = None,
     level: int = VERBOSE_LEVEL,
 ) -> Iterator[Callable[[], None]]:
-    """
-    Helper for streaming task stderr into logger using pygtail. Context manager yielding a function
-    which reads the latest lines from the file and writes them into logger at verbose level. This
-    function also runs automatically on context exit.
+    r"""
+    Helper for streaming an append-only log file (e.g. task stderr.txt) into a logger. Context
+    manager yielding a function which reads any newly-appended complete lines from the file and
+    passes each to ``callback`` (default: log at ``level``). The function is also called
+    automatically on context exit. It isn't thread-safe: call it from one thread only.
 
-    Stops if it sees a line greater than 4KB, in case writer goes haywire.
-    """
-    from pygtail import Pygtail  # delayed heavy import
+    Only whole terminated lines are emitted; a trailing partial line is buffered until the writer
+    completes it. Lines may be terminated by \n, \r\n, or \r, and are passed to ``callback``
+    normalized to a single trailing \n. Stops (with a warning) if an unterminated line exceeds
+    4 KiB, in case the writer goes haywire.
 
-    pygtail = None
-    if logger.isEnabledFor(level):
-        pygtail = Pygtail(filename, full_lines=True)
+    The file is read in binary and decoded incrementally as UTF-8 (invalid bytes are replaced with
+    U+FFFD). This correctly handles a multi-byte character whose bytes are only partially written
+    (or partially read) at poll time: the incomplete tail is held by the decoder and completed on a
+    later poll, rather than being corrupted by decoding a torn byte sequence. A multi-byte sequence
+    that is never completed (e.g. because the writer died) is simply dropped along with the rest of
+    its unterminated line, consistent with how any other trailing partial line is handled.
+
+    Each poll reads the file in bounded chunks, emitting the complete lines from each chunk before
+    reading the next, so that a large backlog (a task that wrote a lot of stderr since the previous
+    poll) streams through in constant memory instead of being buffered whole.
+    """
     logger2 = logger.getChild("stderr")
 
     def default_callback(line: str) -> None:
-        assert len(line) <= 4096, "line > 4KB"
         logger2.log(level, line.rstrip())
 
-    callback = callback or default_callback
+    cb = callback or default_callback
+    enabled = logger.isEnabledFor(level)
+
+    state: _TailState = None
+
+    def drain(final: bool) -> None:
+        nonlocal state
+        if isinstance(state, _TailStopped) or not enabled:
+            return
+        try:
+            if state is None:
+                try:
+                    state = _TailStream(
+                        open(filename, "rb"),
+                        codecs.getincrementaldecoder("utf-8")(errors="replace"),
+                    )
+                except FileNotFoundError:
+                    return  # writer hasn't created it (yet); try again on the next poll
+            fh, decoder, leftover = state
+            for chunk in iter(lambda: fh.read(_TAIL_CHUNK_BYTES), b""):
+                leftover = _tail_emit_lines(leftover + decoder.decode(chunk), False, cb)
+                if len(leftover) > _TAIL_MAX_LINE:
+                    raise RuntimeError(f"unterminated log line exceeds {_TAIL_MAX_LINE} characters")
+            if final:
+                leftover = _tail_emit_lines(leftover, True, cb)
+            state = state._replace(leftover=leftover)
+        except Exception as exn:
+            logger.warning(
+                StructuredLogMessage("log stream is incomplete", filename=filename, error=str(exn))
+            )
+            state = _tail_close(state)
 
     def poll() -> None:
-        nonlocal pygtail
-        if pygtail:
-            try:
-                for line in pygtail:
-                    callback(line)
-            except Exception as exn:
-                # cf. https://github.com/bgreenlee/pygtail/issues/48
-                logger.warning(
-                    StructuredLogMessage(
-                        "log stream is incomplete", filename=filename, error=str(exn)
-                    )
-                )
-                pygtail = None
+        drain(False)
 
     try:
         yield poll
     finally:
-        poll()
+        try:
+            drain(True)
+        finally:
+            state = _tail_close(state)
+
+
+# Deprecated alias for the name used before miniwdl v1.16; out-of-tree container backends import
+# it from here.
+PygtailLogger = TailLogger
+__all__.append("PygtailLogger")
 
 
 _terminating: Optional[bool] = None
