@@ -381,9 +381,25 @@ class RuntimeError(Exception):
     Backend-specific information about an error (for example, pointer to a centralized log system)
     """
 
+    value_path: Optional[List[str]] = None
+    """
+    Location of the error within a nested value being built or coerced, e.g. the path from a
+    workflow input to the offending item of JSON; None if the error has no such location. Rendered
+    by ``__str__()`` as an ``(in ...)`` suffix; see :func:`_extend_value_path`. The default is a
+    class attribute, so it's left immutable and :func:`_extend_value_path` rebinds instead.
+    """
+
     def __init__(self, *args, more_info: Optional[Dict[str, Any]] = None, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.more_info = more_info if more_info else {}
+
+    def __str__(self) -> str:
+        ans = super().__str__()
+        if self.value_path:
+            rendered = "".join(self.value_path)
+            # the outermost segment is the root (an input name or struct member): no separator
+            ans += f" (in {rendered[1:] if rendered.startswith('.') else rendered})"
+        return ans
 
 
 class EvalError(RuntimeError):
@@ -422,3 +438,29 @@ class InputError(RuntimeError):
     """Error reading an input value/file"""
 
     pass
+
+
+def _extend_value_path(exn: RuntimeError, segment: str) -> None:
+    """
+    Prepend a path segment to ``exn``'s location within a nested value.
+
+    Used while building WDL values from JSON (or coercing them), where the failure is detected deep
+    inside a nested value: only the innermost frame knows the reason, and only the enclosing frames
+    know where it lives. Each frame prepends its own segment on the way out, so that
+    ``str(exn)`` names both. Segments carry their own punctuation (``.member``, ``[0]``) and are
+    simply concatenated.
+
+    ``exn.args`` is left alone, so it remains the message as raised. Code that composes an inner
+    message into a new outer one should therefore read ``args[0]``, while code that reports an
+    error to the user should use ``str()`` to pick up the location.
+    """
+    # rebind rather than mutate: the None default lives on the class, shared by all instances
+    exn.value_path = [segment] + (exn.value_path or [])
+
+
+def _has_value_path(exn: RuntimeError) -> bool:
+    """
+    Whether ``exn`` already names a location within a nested value -- whether or not any route to
+    it has accumulated yet, so an empty path still counts.
+    """
+    return exn.value_path is not None

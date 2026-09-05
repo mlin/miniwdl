@@ -18,7 +18,6 @@ import posixpath
 import threading
 from abc import ABC
 from typing import Any, List, Optional, Tuple, Dict, Iterable, Union, Callable, Set, TYPE_CHECKING
-from contextlib import suppress
 from . import Error, Type, Env
 
 if TYPE_CHECKING:
@@ -121,7 +120,7 @@ class Base(ABC):
             return Array(desired_type.item_type, [self.coerce(desired_type.item_type)], self.expr)
         if desired_type and not self.type.coerces(desired_type):
             # owing to static type-checking, this path should arise only rarely e.g. read_json()
-            raise Error.InputError(f"cannot coerce {str(self.type)} to {str(desired_type)}")
+            raise Error.InputError(f"cannot coerce '{self.type}' to '{desired_type}'")
         return self
 
     def expect(self, desired_type: Optional[Type.Base] = None) -> "Base":
@@ -192,7 +191,7 @@ class String(Base):
             if isinstance(desired_type, Type.Float):
                 return Float(float(self.value), self.expr)
         except ValueError as exn:
-            msg = f"coercing String to {desired_type}: {exn}"
+            msg = f"coercing 'String' to '{desired_type}': {exn}"
             raise Error.EvalError(self.expr, msg) if self.expr else Error.RuntimeError(msg)
         return super().coerce(desired_type)
 
@@ -348,7 +347,7 @@ class Map(Base):
                     # some coercions that typecheck could still fail, e.g. String to Int
                     msg = (
                         "runtime type mismatch initializing "
-                        f"{desired_type.members[ks]} {ks} member of struct {desired_type.type_name}"
+                        f"'{desired_type.members[ks]}' member '{ks}' of struct '{desired_type.type_name}'"
                     ) + ((": " + exc.args[0]) if exc.args else "")
                     raise (
                         Error.EvalError(
@@ -478,7 +477,7 @@ class Struct(Base):
         if isinstance(desired_type, Type.Map):
             return self._coerce_to_map(desired_type)
         if not isinstance(desired_type, (Type.Any, Type.Object)):
-            self._eval_error(f"cannot coerce struct to {desired_type}")
+            self._eval_error(f"cannot coerce struct to '{desired_type}'")
         # Object coercion is a no-op because we expect a further coercion to StructInstance to
         # follow in short order, providing the expected member types.
         return self
@@ -508,16 +507,17 @@ class Struct(Base):
                 except Error.RuntimeError as exc:
                     # some coercions that typecheck could still fail, e.g. String to Int; note the
                     # offending member, taking care not to obscure it if the struct is nested
-                    msg = ""
-                    if exc.args:
-                        if "member of struct" in exc.args[0]:
-                            raise
-                        msg = ": " + exc.args[0]
+                    if Error._has_value_path(exc):
+                        # an inner member already described the failure; just extend its path
+                        Error._extend_value_path(exc, f".{k}")
+                        raise
+                    msg = ": " + exc.args[0] if exc.args else ""
                     msg = (
                         "runtime type mismatch initializing "
-                        f"{desired_type.members[k]} {k} member of struct {desired_type.type_name}"
+                        f"'{desired_type.members[k]}' member '{k}' of struct"
+                        f" '{desired_type.type_name}'"
                     ) + msg
-                    self._eval_error(msg)
+                    self._eval_error(msg, value_path=[])
         return Struct(desired_type, members, expr=self.expr, extra=extra)
 
     def _coerce_to_map(self, desired_type: Type.Map) -> Map:
@@ -525,7 +525,7 @@ class Struct(Base):
         assert isinstance(self.type, Type.Object)
         key_type = desired_type.item_type[0]
         if not Type.String().coerces(key_type):
-            self._eval_error(f"cannot coerce struct member names to {desired_type} keys")
+            self._eval_error(f"cannot coerce struct member names to '{desired_type}' keys")
         value_type = desired_type.item_type[1]
         entries = []
         for k, v in self.value.items():
@@ -535,28 +535,42 @@ class Struct(Base):
                 try:
                     map_key = String(k).coerce(key_type)
                 except Error.RuntimeError:
-                    self._eval_error(f"cannot coerce struct member name {k} to {desired_type} key")
-                if self.type.members[k].coerces(value_type):
-                    with suppress(Error.RuntimeError):
-                        map_value = v.coerce(value_type)
-                if map_value is None:
+                    self._eval_error(f"cannot coerce member name '{k}' to '{desired_type}' key")
+                if not self.type.members[k].coerces(value_type):
+                    # no coercion to attempt, so the member's type is the whole explanation
                     self._eval_error(
-                        "cannot coerce struct member"
-                        f" {self.type.members[k]} {k} to {value_type} map value"
+                        f"cannot coerce member '{k}' of type '{self.type.members[k]}'"
+                        f" to '{value_type}' map value"
+                    )
+                try:
+                    map_value = v.coerce(value_type)
+                except Error.RuntimeError as exc:
+                    # the coercion typechecked but this value failed it: the reason lies within the
+                    # member, so keep it (and any route into it) rather than reporting a type clash
+                    self._eval_error(
+                        f"cannot coerce member '{k}' to '{value_type}' map value"
+                        + ((": " + exc.args[0]) if exc.args else ""),
+                        value_path=exc.value_path or [],
                     )
                 assert map_key and map_value
                 entries.append((map_key, map_value))
         return Map(desired_type.item_type, entries)
 
-    def _eval_error(self, msg: str) -> None:
-        raise (
+    def _eval_error(self, msg: str, value_path: Optional[List[str]] = None) -> None:
+        # Pass value_path when msg names the member that failed, so that enclosing structs add only
+        # the route to it rather than re-framing: [] locates the error without contributing a
+        # segment, and a non-empty list carries a route inherited from within the member.
+        exn = (
             Error.EvalError(
                 self.expr,
                 msg,
             )
             if self.expr
             else Error.RuntimeError(msg)
-        ) from None
+        )
+        if value_path is not None:
+            exn.value_path = value_path
+        raise exn from None
 
     def __str__(self) -> Any:
         return "{" + ", ".join(f"{k}: {str(v)}" for k, v in self.value.items()) + "}"
@@ -600,7 +614,10 @@ def from_json(type: Type.Base, value: Any) -> Base:
     if isinstance(type, (Type.String, Type.Any)) and isinstance(value, str):
         return String(value)
     if isinstance(type, Type.Array) and isinstance(value, list):
-        return Array(type.item_type, [from_json(type.item_type, item) for item in value])
+        return Array(
+            type.item_type,
+            [_from_json_at(type.item_type, item, f"[{i}]") for i, item in enumerate(value)],
+        )
     if (
         isinstance(type, Type.Pair)
         and isinstance(value, dict)
@@ -611,8 +628,8 @@ def from_json(type: Type.Base, value: Any) -> Base:
             type.left_type,
             type.right_type,
             (
-                from_json(type.left_type, lowercased_value["left"]),
-                from_json(type.right_type, lowercased_value["right"]),
+                _from_json_at(type.left_type, lowercased_value["left"], ".left"),
+                _from_json_at(type.right_type, lowercased_value["right"], ".right"),
             ),
         )
     if (
@@ -623,18 +640,28 @@ def from_json(type: Type.Base, value: Any) -> Base:
         items = []
         for k, v in value.items():
             assert isinstance(k, str)
-            items.append((String(k).coerce(type.item_type[0]), from_json(type.item_type[1], v)))
+            items.append(
+                (
+                    String(k).coerce(type.item_type[0]),
+                    _from_json_at(type.item_type[1], v, f"[{json.dumps(k)}]"),
+                )
+            )
         return Map(type.item_type, items)
     if (
         isinstance(type, Type.StructInstance)
         and isinstance(value, dict)
         and type.members is not None
     ):
-        for k, ty in type.members.items():
-            if k not in value and not ty.optional:
-                raise Error.InputError(
-                    f"initializer for struct {str(type)} omits required field(s)"
-                )
+        missing = [k for k, ty in type.members.items() if k not in value and not ty.optional]
+        if missing:
+            msg = f"initializer for struct '{type}' omits required field(s): " + ", ".join(
+                f"'{k}'" for k in missing
+            )
+            unknown = [k for k in value if k not in type.members]
+            if unknown:
+                # often the actual mistake is a misspelled field name, which this diagnoses
+                msg += "; unknown field(s): " + ", ".join(f"'{k}'" for k in unknown)
+            raise Error.InputError(msg)
         members = {}
         extra = set()
         for k, v in value.items():
@@ -642,17 +669,33 @@ def from_json(type: Type.Base, value: Any) -> Base:
             if k not in type.members:
                 extra.add(k)
             else:
-                try:
-                    members[k] = from_json(type.members[k], v)
-                except Error.InputError:
-                    raise Error.InputError(
-                        f"couldn't initialize struct {str(type)} {type.members[k]} {k} from {json.dumps(v)}"
-                    ) from None
+                members[k] = _from_json_at(type.members[k], v, f".{k}")
         # Struct.__init__ will populate null for any omitted optional members
         return Struct(type, members, extra=extra)
     if type.optional and value is None:
         return Null()
-    raise Error.InputError(f"couldn't construct {str(type)} from {json.dumps(value)}")
+    raise Error.InputError(f"couldn't construct '{type}' from {_abbreviate_json(value)}")
+
+
+def _from_json_at(type: Type.Base, value: Any, segment: str) -> Base:
+    """
+    from_json() on a component of an enclosing value, noting the component's location on any error
+    so that the innermost reason is reported alongside the full path to it.
+    """
+    try:
+        return from_json(type, value)
+    except Error.InputError as exn:
+        Error._extend_value_path(exn, segment)
+        raise
+
+
+def _abbreviate_json(value: Any, limit: int = 160) -> str:
+    """
+    Render a JSON value for an error message, truncating it if long. The path reported alongside
+    identifies the location precisely, so a huge blob adds nothing but noise.
+    """
+    ans = json.dumps(value)
+    return ans if len(ans) <= limit else ans[:limit] + "..."
 
 
 def _infer_from_json(
