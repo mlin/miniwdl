@@ -35,7 +35,7 @@ keywords["draft-2"] = {
 keywords["1.0"] = keywords["draft-2"] | {"alias", "struct"}
 keywords["1.1"] = keywords["1.0"]
 keywords["1.2"] = keywords["1.1"] | {"Directory", "env", "hints", "requirements"}
-keywords["development"] = keywords["1.2"]
+keywords["development"] = set(keywords["1.2"])
 
 # Grammar versions and their definitions. The productions for WDL 1.2 and development will be
 # defined in this file, while older versions are found in _grammar_old.py.
@@ -45,7 +45,7 @@ versions = {
     "1.1": productions_1_1,
 }
 
-versions["development"] = r"""
+versions["1.2"] = r"""
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // document
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -283,7 +283,14 @@ COMMENT: /[ \t]*/ "#" /[^\r\n]*/
 %ignore NEWLINE
 %ignore COMMENT
 """
-versions["1.2"] = versions["development"]
+
+# The development grammar is WDL 1.2 plus productions for any new features under development, which
+# can redefine existing rules using Lark's %override directive, e.g.
+#   %override ?inner_workflow_element: any_decl | call | scatter | conditional | new_feature
+#   new_feature: ...
+development_productions = r"""
+"""
+versions["development"] = versions["1.2"] + development_productions
 
 
 def get(version: str | None = None) -> tuple[str, set[str]]:
